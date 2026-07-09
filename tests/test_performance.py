@@ -66,9 +66,22 @@ class TestThermal:
         state = get_thermal_state("S", adb=adb)
         assert state["status_label"] == "NONE"
         hot = {s["name"]: s for s in state["sensors"]}
-        assert hot["pcb1-usr"]["warning"] is True  # 41.5C > 40C warn threshold
+        assert hot["pcb1-usr"]["warning"] is True  # SKIN 41.5C > 40C warn
         assert hot["soc-usr"]["warning"] is False
         assert state["max_skin_temp_c"] == 41.5
+
+    def test_thresholds_are_per_sensor_type(self, adb):
+        # A 45C CPU core is idle silicon, not a throttle risk; a 45C skin is
+        wire(adb, {"thermalservice": (
+            "Thermal Status: 0\n"
+            "Cached temperatures:\n"
+            "\tTemperature{mValue=45.0, mType=0, mName=cpu-1-0-0, mStatus=0}\n"
+            "\tTemperature{mValue=45.0, mType=3, mName=skin-x, mStatus=0}\n"
+        )})
+        state = get_thermal_state("S", adb=adb)
+        by_name = {s["name"]: s for s in state["sensors"]}
+        assert by_name["cpu-1-0-0"]["warning"] is False
+        assert by_name["skin-x"]["warning"] is True
 
 
 class TestSnapshot:

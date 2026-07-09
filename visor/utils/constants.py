@@ -61,6 +61,23 @@ CELSIUS_TEMPERATURE_TYPES = {0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17
 THERMAL_WARN_C = 40.0
 THERMAL_CRITICAL_C = 46.0
 
+# Per-sensor-type (warn, critical) thresholds in C. Silicon runs much hotter
+# than skin — a 40C CPU core is idle, a 40C skin sensor is a throttling risk.
+THERMAL_THRESHOLDS_BY_TYPE = {
+    "SKIN": (THERMAL_WARN_C, THERMAL_CRITICAL_C),
+    "BATTERY": (42.0, 50.0),
+    "USB_PORT": (45.0, 55.0),
+    "CPU": (85.0, 95.0),
+    "GPU": (85.0, 95.0),
+    "NPU": (85.0, 95.0),
+    "SOC": (85.0, 95.0),
+    "MODEM": (85.0, 95.0),
+    "WIFI": (85.0, 95.0),
+    "DISPLAY": (60.0, 70.0),
+    "CAMERA": (60.0, 70.0),
+}
+_DEFAULT_THRESHOLDS = (60.0, 75.0)
+
 # Android screenrecord hard limit
 MAX_SCREENRECORD_SECONDS = 180
 

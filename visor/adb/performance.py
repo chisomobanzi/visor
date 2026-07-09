@@ -7,7 +7,12 @@ import time
 from typing import Optional
 
 from visor.adb.wrapper import ADBCommandError, ADBWrapper, get_adb
-from visor.utils.constants import THERMAL_CRITICAL_C, THERMAL_WARN_C
+from visor.utils.constants import (
+    _DEFAULT_THRESHOLDS,
+    THERMAL_CRITICAL_C,
+    THERMAL_THRESHOLDS_BY_TYPE,
+    THERMAL_WARN_C,
+)
 from visor.utils.parser import parse_dumpsys_battery, parse_thermalservice
 
 _CPU_LINE_RE = re.compile(r"(\d+)%cpu\b.*?(\d+(?:\.\d+)?)%idle")
@@ -32,8 +37,11 @@ def get_thermal_state(
     skin_temps = []
     for sensor in state["sensors"]:
         temp = sensor["temperature_c"]
-        sensor["warning"] = temp >= THERMAL_WARN_C
-        sensor["critical"] = temp >= THERMAL_CRITICAL_C
+        warn, critical = THERMAL_THRESHOLDS_BY_TYPE.get(
+            sensor["type"], _DEFAULT_THRESHOLDS
+        )
+        sensor["warning"] = temp >= warn
+        sensor["critical"] = temp >= critical
         if sensor["type"] == "SKIN":
             skin_temps.append(temp)
     state["max_skin_temp_c"] = max(skin_temps) if skin_temps else None
