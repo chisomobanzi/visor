@@ -130,7 +130,7 @@ def parse_df_line(output: str) -> Optional[StorageInfo]:
     """Parse a single `df -h <path>` data line (no header)."""
     for line in output.splitlines():
         parts = line.split()
-        if len(parts) >= 5 and parts[4].endswith("%"):
+        if len(parts) >= 5 and parts[4].endswith("%") and parts[4][:-1].isdigit():
             return StorageInfo(
                 total=parts[1],
                 used=parts[2],

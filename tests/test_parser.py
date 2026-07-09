@@ -97,6 +97,15 @@ class TestSmallParsers:
         s = parse_df_line("/dev/block/dm-55 448G  34G  415G   8% /data\n")
         assert (s.total, s.used, s.available, s.used_percent) == ("448G", "34G", "415G", 8)
 
+    def test_df_with_header(self):
+        # Real `df -h /data` includes a header whose 5th column is "Use%"
+        out = (
+            "Filesystem       Size Used Avail Use% Mounted on\n"
+            "/dev/block/dm-55 448G  34G  415G   8% /data\n"
+        )
+        s = parse_df_line(out)
+        assert s.used_percent == 8
+
     def test_ip_route(self):
         ip = parse_ip_route("192.168.1.0/24 dev wlan0 proto kernel scope link src 192.168.1.31 \n")
         assert ip == "192.168.1.31"
