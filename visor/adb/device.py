@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from visor.adb.wrapper import ADBCommandError, ADBWrapper, get_adb
-from visor.utils.constants import DEFAULT_WIRELESS_PORT, QUEST_PRODUCTS
+from visor.utils.constants import DEFAULT_WIRELESS_PORT
 from visor.utils.parser import (
     BatteryInfo,
     Device,

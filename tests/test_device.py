@@ -10,7 +10,7 @@ from visor.adb.device import (
     get_device_info,
     pair_device,
 )
-from visor.adb.wrapper import ADBCommandError, DeviceUnauthorizedError
+from visor.adb.wrapper import ADBCommandError
 
 # Real output from `adb devices -l` with a Quest 3 attached
 DEVICES_L = """List of devices attached

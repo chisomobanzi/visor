@@ -1,13 +1,12 @@
 """Tests for the visor CLI (typer runner with mocked visor.adb)."""
 
-from unittest import mock
 
 import pytest
 from typer.testing import CliRunner
 
 from visor import adb as adb_module
 from visor.cli.main import app
-from visor.utils.parser import BatteryInfo, Device, LogEntry, StorageInfo
+from visor.utils.parser import Device, LogEntry
 
 runner = CliRunner()
 

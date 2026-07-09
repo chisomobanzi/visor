@@ -1,6 +1,5 @@
 """Tests for the MCP server tool layer (mocked visor.adb underneath)."""
 
-from unittest import mock
 
 import pytest
 
