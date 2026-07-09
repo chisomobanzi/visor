@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>visor — Quest control</title>
+<style>
+  :root {
+    --bg: #101318; --surface: #171b22; --raised: #1d232d; --line: #2a303b;
+    --ink: #e8eaf2; --muted: #8a93a6; --faint: #5a6272;
+    --lens: #6bcbdf; --good: #2fa36b; --warn: #c98500; --bad: #e66767;
+    --s-cpu: #3987e5; --s-mem: #199e70; --s-temp: #c98500; --s-batt: #4ea24e;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace;
+    --body: "Inter", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--body);
+    font-size: 14px; line-height: 1.5; min-height: 100vh;
+  }
+  ::selection { background: rgba(107,203,223,.25); }
+
+  /* ---------- shell ---------- */
+  .shell { display: grid; grid-template-columns: 208px 1fr; min-height: 100vh; }
+  nav {
+    border-right: 1px solid var(--line); padding: 20px 0; position: sticky;
+    top: 0; height: 100vh; display: flex; flex-direction: column;
+  }
+  .brand {
+    font-family: var(--mono); padding: 0 20px 18px; font-size: 15px;
+    letter-spacing: .16em; display: flex; align-items: center; gap: 9px;
+  }
+  .brand .mark { width: 22px; height: 13px; position: relative; }
+  .brand .mark::before, .brand .mark::after {
+    content: ""; position: absolute; top: 0; width: 12px; height: 12px;
+    border: 1.5px solid var(--lens); border-radius: 50%;
+  }
+  .brand .mark::before { left: 0; } .brand .mark::after { right: 0; }
+  nav a {
+    display: block; padding: 9px 20px; color: var(--muted); text-decoration: none;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--ink); }
+  nav a.active { color: var(--lens); border-left-color: var(--lens); background: rgba(107,203,223,.05); }
+  nav a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid var(--lens); outline-offset: 2px;
+  }
+  .nav-foot { margin-top: auto; padding: 0 20px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+
+  main { padding: 26px 32px 60px; max-width: 1180px; }
+
+  /* ---------- header strip ---------- */
+  .statusbar {
+    display: flex; align-items: center; gap: 14px; padding-bottom: 18px;
+    border-bottom: 1px solid var(--line); margin-bottom: 24px; flex-wrap: wrap;
+  }
+  .statusbar .dev { font-family: var(--mono); font-size: 13px; }
+  .chip {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+    padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+  .chip.on { border-color: rgba(47,163,107,.4); color: var(--good); }
+  .chip.on .dot { background: var(--good); animation: pulse 2.4s infinite; }
+  .chip.warn { border-color: rgba(201,133,0,.5); color: var(--warn); }
+  .chip.warn .dot { background: var(--warn); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  .statusbar .spacer { flex: 1; }
+
+  /* ---------- common ---------- */
+  section { display: none; }
+  section.active { display: block; animation: fadein .18s ease; }
+  @keyframes fadein { from { opacity: 0; } }
+  h2 {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .18em;
+    color: var(--faint); font-weight: 500; text-transform: uppercase;
+    margin: 26px 0 12px;
+  }
+  h2:first-child { margin-top: 0; }
+  .grid { display: grid; gap: 14px; }
+  .cards2 { grid-template-columns: 1fr 1fr; }
+  .cards4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; } nav { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; }
+    .nav-foot { display: none; }
+    .cards2, .cards4 { grid-template-columns: 1fr; }
+  }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 18px; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { font-family: var(--mono); }
+  button, .btn {
+    background: var(--raised); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 14px; font-family: var(--mono);
+    font-size: 11px; letter-spacing: .08em; cursor: pointer;
+  }
+  button:hover { border-color: var(--lens); color: var(--lens); }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:disabled:hover { border-color: var(--line); color: var(--ink); }
+  input, select {
+    background: var(--raised); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 7px; padding: 7px 10px; font-family: var(--mono); font-size: 12px;
+  }
+  input::placeholder { color: var(--faint); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    color: var(--faint); text-transform: uppercase; font-weight: 500;
+    padding: 6px 10px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 7px 10px; border-bottom: 1px solid rgba(42,48,59,.5); font-family: var(--mono); font-size: 12px; }
+  td .actions { display: flex; gap: 5px; flex-wrap: nowrap; }
+  td button { padding: 4px 9px; font-size: 10px; }
+  tr:hover td { background: rgba(107,203,223,.03); }
+  .empty { color: var(--faint); font-size: 13px; padding: 22px; text-align: center; }
+  .num { text-align: right; }
+
+  /* ---------- lens gauges (signature) ---------- */
+  .lenses { display: flex; align-items: center; gap: 0; justify-content: center; padding: 8px 0 2px; }
+  .lens-gauge { width: 168px; height: 168px; position: relative; }
+  .lens-gauge + .lens-gauge { margin-left: -14px; }
+  .lens-gauge svg { transform: rotate(-90deg); }
+  .lens-gauge .val {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1px;
+  }
+  .lens-gauge .val b { font-size: 27px; font-weight: 300; font-family: var(--mono); }
+  .lens-gauge .val span { font-family: var(--mono); font-size: 9px; letter-spacing: .16em; color: var(--faint); text-transform: uppercase; }
+  .overview-hero { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center; }
+  @media (max-width: 900px) { .overview-hero { grid-template-columns: 1fr; } }
+
+  /* ---------- charts ---------- */
+  .chart-card h3 { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; font-weight: 500; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+  .chart-card h3 .now { color: var(--ink); font-size: 14px; }
+  .chart-card h3 .u { color: var(--faint); font-size: 10px; }
+  .chart-wrap { position: relative; margin-top: 8px; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--raised);
+    border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px;
+    font-family: var(--mono); font-size: 11px; display: none; white-space: nowrap; z-index: 3;
+  }
+
+  /* ---------- logs ---------- */
+  .logbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .lvl-chips { display: flex; gap: 4px; }
+  .lvl-chips button { padding: 5px 10px; border-radius: 999px; }
+  .lvl-chips button.sel { border-color: var(--lens); color: var(--lens); }
+  .logview {
+    background: #0c0f14; border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 0; font-family: var(--mono); font-size: 12px;
+    max-height: 560px; overflow: auto;
+  }
+  .logline { padding: 1.5px 14px; display: flex; gap: 10px; white-space: pre-wrap; word-break: break-word; }
+  .logline:hover { background: rgba(107,203,223,.04); }
+  .logline .ts { color: var(--faint); flex-shrink: 0; }
+  .logline .tag { color: var(--muted); flex-shrink: 0; min-width: 110px; }
+  .lv { flex-shrink: 0; width: 14px; text-align: center; border-radius: 3px; font-weight: 600; }
+  .lv-V, .lv-D { color: var(--faint); } .lv-I { color: var(--good); }
+  .lv-W { color: var(--warn); } .lv-E, .lv-F { color: var(--bad); }
+  .crash { border-left: 2px solid var(--bad); padding: 10px 14px; margin: 10px 0; background: rgba(230,103,103,.04); border-radius: 0 8px 8px 0; }
+  .crash pre { font-size: 11px; color: var(--muted); overflow: auto; max-height: 240px; margin-top: 6px; }
+  .crash .meta { font-family: var(--mono); font-size: 11px; color: var(--bad); }
+
+  /* ---------- viewport ---------- */
+  .viewport {
+    background: #000; border: 1px solid var(--line); border-radius: 12px;
+    min-height: 320px; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; position: relative;
+  }
+  .viewport img { width: 100%; display: block; }
+  .viewport .hint { color: var(--faint); font-family: var(--mono); font-size: 12px; padding: 60px; text-align: center; }
+  .capbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+  .capbar .note { color: var(--faint); font-size: 12px; margin-left: auto; font-family: var(--mono); }
+
+  /* ---------- thermal ---------- */
+  .thermal-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-family: var(--mono); font-size: 12px; }
+  .thermal-row .name { min-width: 130px; color: var(--muted); }
+  .thermal-row .bar { flex: 1; height: 4px; background: var(--raised); border-radius: 2px; overflow: hidden; }
+  .thermal-row .bar i { display: block; height: 100%; background: var(--s-temp); border-radius: 2px; }
+  .thermal-row.hot .bar i { background: var(--bad); }
+  .thermal-row .t { width: 62px; text-align: right; }
+
+  /* ---------- toast ---------- */
+  #toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: var(--raised); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 9px; padding: 10px 18px; font-family: var(--mono); font-size: 12px;
+    display: none; z-index: 40; max-width: 80vw;
+  }
+  #toast.err { border-color: var(--bad); color: var(--bad); }
+  .storagebar { height: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; margin-top: 6px; }
+  .storagebar i { display: block; height: 100%; background: var(--lens); }
+  .crumbs { font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
+  .crumbs a { color: var(--lens); text-decoration: none; cursor: pointer; }
+  .crumbs a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav aria-label="Sections">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>VISOR</div>
+    <a href="#overview" class="active">OVERVIEW</a>
+    <a href="#viewport">VIEWPORT</a>
+    <a href="#performance">PERFORMANCE</a>
+    <a href="#logs">LOGS</a>
+    <a href="#apps">APPS</a>
+    <a href="#files">FILES</a>
+    <div class="nav-foot">quest devtools<br>for linux</div>
+  </nav>
+
+  <main>
+    <div class="statusbar">
+      <span class="dev" id="dev-name">no device</span>
+      <span class="chip" id="dev-chip"><span class="dot"></span><span id="dev-state">SCANNING</span></span>
+      <span class="chip" id="thermal-chip" hidden><span class="dot"></span><span id="thermal-state"></span></span>
+      <span class="spacer"></span>
+      <button id="btn-wireless" title="Switch to wireless ADB">GO WIRELESS</button>
+    </div>
+
+    <!-- ================= OVERVIEW ================= -->
+    <section id="overview" class="active">
+      <div class="card overview-hero">
+        <div class="lenses" aria-label="Skin temperature and battery gauges">
+          <div class="lens-gauge" id="gauge-temp"></div>
+          <div class="lens-gauge" id="gauge-batt"></div>
+        </div>
+        <div>
+          <dl class="kv" id="ov-info">
+            <dt>Model</dt><dd id="ov-model">—</dd>
+            <dt>OS / firmware</dt><dd id="ov-os">—</dd>
+            <dt>WiFi</dt><dd id="ov-ip">—</dd>
+            <dt>Foreground</dt><dd id="ov-fg">—</dd>
+            <dt>Storage</dt><dd id="ov-storage">—</dd>
+          </dl>
+          <div class="storagebar" aria-hidden="true"><i id="ov-storagebar" style="width:0"></i></div>
+        </div>
+      </div>
+
+      <h2>Tracking</h2>
+      <div class="card">
+        <dl class="kv" id="ov-tracking"><dt>—</dt><dd>querying…</dd></dl>
+      </div>
+    </section>
+
+    <!-- ================= VIEWPORT ================= -->
+    <section id="viewport">
+      <div class="capbar">
+        <button id="btn-shot">CAPTURE</button>
+        <button id="btn-live">LIVE VIEW</button>
+        <select id="rec-secs" aria-label="Recording length">
+          <option value="10">10 s</option><option value="30" selected>30 s</option>
+          <option value="60">60 s</option><option value="120">120 s</option>
+        </select>
+        <button id="btn-rec">RECORD</button>
+        <span class="note" id="cap-note">left-eye view</span>
+      </div>
+      <div class="viewport" id="vp">
+        <div class="hint">Press CAPTURE to see what's on the headset.<br>LIVE VIEW refreshes every few seconds.</div>
+      </div>
+    </section>
+
+    <!-- ================= PERFORMANCE ================= -->
+    <section id="performance">
+      <div class="capbar">
+        <button id="btn-perf-toggle">START MONITORING</button>
+        <span class="note" id="perf-note">samples every 2.5 s while running</span>
+      </div>
+      <div class="grid cards2" id="charts"></div>
+      <h2>Top processes</h2>
+      <div class="card"><table id="proc-table">
+        <thead><tr><th>PID</th><th class="num">CPU %</th><th class="num">MEM %</th><th>Process</th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">start monitoring to sample processes</td></tr></tbody>
+      </table></div>
+      <h2>Thermal sensors</h2>
+      <div class="card" id="thermal-list"><div class="empty">start monitoring to read sensors</div></div>
+    </section>
+
+    <!-- ================= LOGS ================= -->
+    <section id="logs">
+      <div class="logbar">
+        <div class="lvl-chips" role="group" aria-label="Minimum level" id="lvl-chips">
+          <button data-l="V">V</button><button data-l="D">D</button><button data-l="I">I</button>
+          <button data-l="W" class="sel">W</button><button data-l="E">E</button>
+        </div>
+        <input id="log-tag" placeholder="tag (Unity, VrApi…)" size="14">
+        <input id="log-grep" placeholder="grep pattern" size="16">
+        <button id="btn-logs">FETCH</button>
+        <button id="btn-logs-live">FOLLOW</button>
+        <button id="btn-crashes">CRASH REPORTS</button>
+      </div>
+      <div class="logview" id="logview"><div class="empty">Fetch logs, or FOLLOW to tail while you reproduce a bug.</div></div>
+      <div id="crashview"></div>
+    </section>
+
+    <!-- ================= APPS ================= -->
+    <section id="apps">
+      <div class="capbar">
+        <select id="app-filter" aria-label="App filter">
+          <option value="sideloaded" selected>sideloaded</option>
+          <option value="all">all</option><option value="system">system</option>
+        </select>
+        <button id="btn-apps">REFRESH</button>
+        <label class="btn" style="cursor:pointer">INSTALL APK<input type="file" id="apk-file" accept=".apk" hidden></label>
+        <span class="note" id="apps-note"></span>
+      </div>
+      <div class="card"><table id="apps-table">
+        <thead><tr><th>Package</th><th>Actions</th></tr></thead>
+        <tbody><tr><td colspan="2" class="empty">no apps loaded yet</td></tr></tbody>
+      </table></div>
+    </section>
+
+    <!-- ================= FILES ================= -->
+    <section id="files">
+      <div class="capbar">
+        <label class="btn" style="cursor:pointer">UPLOAD HERE<input type="file" id="up-file" hidden></label>
+        <span class="note" id="files-note"></span>
+      </div>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="card"><table id="files-table">
+        <thead><tr><th>Name</th><th class="num">Size</th><th>Modified</th><th style="width:180px"></th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const api = async (path, opts) => {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return r.headers.get("content-type")?.includes("json") ? r.json() : r;
+};
+let toastTimer;
+function toast(message, isErr) {
+  const el = $("#toast");
+  el.textContent = message; el.className = isErr ? "err" : ""; el.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.style.display = "none", 4200);
+}
+const fail = (e) => toast(e.message || String(e), true);
+
+/* ---------------- navigation ---------------- */
+const sections = [...document.querySelectorAll("section")];
+function show(id) {
+  sections.forEach(s => s.classList.toggle("active", s.id === id));
+  document.querySelectorAll("nav a").forEach(a =>
+    a.classList.toggle("active", a.getAttribute("href") === "#" + id));
+}
+window.addEventListener("hashchange", () => show(location.hash.slice(1) || "overview"));
+if (location.hash) show(location.hash.slice(1));
+
+/* ---------------- lens gauges (signature) ---------------- */
+function gauge(el, opts) {
+  const R = 70, C = 2 * Math.PI * R;
+  el.innerHTML = `
+    <svg width="168" height="168" viewBox="0 0 168 168" aria-hidden="true">
+      <circle cx="84" cy="84" r="${R}" fill="none" stroke="var(--raised)" stroke-width="7"/>
+      <circle class="arc" cx="84" cy="84" r="${R}" fill="none" stroke="${opts.color}"
+        stroke-width="7" stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${C}"/>
+    </svg>
+    <div class="val"><b>—</b><span>${opts.label}</span></div>`;
+  return {
+    set(value, text, color) {
+      const frac = Math.max(0, Math.min(1, (value - opts.min) / (opts.max - opts.min)));
+      const arc = el.querySelector(".arc");
+      arc.style.strokeDashoffset = C * (1 - frac);
+      if (color) arc.style.stroke = color;
+      el.querySelector("b").textContent = text;
+    }
+  };
+}
+const gTemp = gauge($("#gauge-temp"), { label: "skin °C", min: 20, max: 50, color: "var(--s-temp)" });
+const gBatt = gauge($("#gauge-batt"), { label: "battery", min: 0, max: 100, color: "var(--s-batt)" });
+
+/* ---------------- overview ---------------- */
+let currentDevice = null;
+async function refreshOverview() {
+  try {
+    const devices = await api("/api/devices");
+    const usable = devices.filter(d => d.state === "device");
+    const locked = devices.filter(d => d.state === "unauthorized");
+    const chip = $("#dev-chip");
+    if (!usable.length) {
+      currentDevice = null;
+      $("#dev-name").textContent = "no device";
+      chip.className = "chip warn";
+      $("#dev-state").textContent = locked.length ? "UNAUTHORIZED — accept prompt in headset" : "DISCONNECTED";
+      return;
+    }
+    const d = usable.find(x => x.is_quest) || usable[0];
+    currentDevice = d.serial;
+    $("#dev-name").textContent = `${d.model || d.serial}`;
+    chip.className = "chip on";
+    $("#dev-state").textContent = d.is_wireless ? "WIRELESS" : "USB";
+
+    const info = await api("/api/info");
+    $("#ov-model").textContent = `${info.model} (${info.serial})`;
+    $("#ov-os").textContent = `Android ${info.os_version} · ${info.firmware}`;
+    $("#ov-ip").textContent = info.ip_address || "not on WiFi";
+    if (info.storage) {
+      $("#ov-storage").textContent =
+        `${info.storage.available} free of ${info.storage.total}`;
+      $("#ov-storagebar").style.width = info.storage.used_percent + "%";
+    }
+    if (info.battery) {
+      gBatt.set(info.battery.level, info.battery.level + "%",
+        info.battery.level < 20 ? "var(--bad)" : "var(--s-batt)");
+    }
+    const thermalChip = $("#thermal-chip");
+    thermalChip.hidden = false;
+    thermalChip.className = "chip " + (info.thermal_status === "NONE" ? "on" : "warn");
+    $("#thermal-state").textContent = "THERMAL " + (info.thermal_status || "?");
+  } catch (e) { /* device polling failures stay quiet; chip shows state */ }
+}
+async function refreshOverviewExtras() {
+  try {
+    const t = await api("/api/thermal");
+    if (t.max_skin_temp_c != null) {
+      gTemp.set(t.max_skin_temp_c, t.max_skin_temp_c.toFixed(1),
+        t.max_skin_temp_c >= t.warn_threshold_c ? "var(--bad)" : "var(--s-temp)");
+    }
+    const perf = await api("/api/perf");
+    $("#ov-fg").textContent = perf.foreground_app || "none";
+    const tr = await api("/api/tracking");
+    $("#ov-tracking").innerHTML = ["head_tracking","hand_tracking","eye_tracking","body_tracking","controller_tracking"]
+      .map(k => `<dt>${k.replace("_"," ")}</dt><dd>${tr[k] ?? "?"}</dd>`).join("");
+  } catch (e) { /* quiet */ }
+}
+refreshOverview().then(refreshOverviewExtras);
+setInterval(refreshOverview, 12000);
+
+$("#btn-wireless").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/wireless", { method: "POST" });
+    toast(r.message);
+  } catch (e) { fail(e); }
+});
+
+/* ---------------- charts ---------------- */
+const SERIES = [
+  { key: "cpu",  title: "CPU",       unit: "%",  color: "var(--s-cpu)",  max: 100,
+    pick: s => s.cpu?.usage_percent },
+  { key: "mem",  title: "MEMORY",    unit: "%",  color: "var(--s-mem)",  max: 100,
+    pick: s => memPercent(s.memory) },
+  { key: "temp", title: "SKIN TEMP", unit: "°C", color: "var(--s-temp)", min: 20, max: 50,
+    pick: s => s.thermal?.max_skin_temp_c },
+  { key: "batt", title: "BATTERY",   unit: "%",  color: "var(--s-batt)", max: 100,
+    pick: s => s.battery?.level },
+];
+function memPercent(m) {
+  if (!m?.total || !m?.used) return null;
+  const parse = v => parseFloat(v) * ({ K: 1, M: 1024, G: 1048576 }[v.replace(/[\d.]/g, "")[0]] || 1);
+  const total = parse(m.total), used = parse(m.used);
+  return total ? +(used / total * 100).toFixed(1) : null;
+}
+const W = 460, H = 120, PAD = 6, MAXPTS = 120;
+const charts = SERIES.map(s => {
+  const card = document.createElement("div");
+  card.className = "card chart-card";
+  card.innerHTML = `
+    <h3><span style="color:${s.color}">●</span> ${s.title}
+        <span class="now">—</span><span class="u">${s.unit}</span></h3>
+    <div class="chart-wrap">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="120" role="img" aria-label="${s.title} over time">
+        <line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="var(--line)" stroke-dasharray="3 5"/>
+        <line x1="0" y1="${PAD}" x2="${W}" y2="${PAD}" stroke="var(--line)" stroke-dasharray="3 5" opacity=".5"/>
+        <path fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>
+        <line class="xh" y1="0" y2="${H}" stroke="var(--faint)" opacity="0" />
+        <circle class="pt" r="3.5" fill="${s.color}" stroke="var(--surface)" stroke-width="2" opacity="0"/>
+      </svg>
+      <div class="tooltip"></div>
+    </div>`;
+  $("#charts").appendChild(card);
+  const svg = card.querySelector("svg"), path = card.querySelector("path");
+  const tip = card.querySelector(".tooltip"), xh = card.querySelector(".xh"), pt = card.querySelector(".pt");
+  const data = [];
+  function coords(i, v) {
+    const min = s.min ?? 0, max = s.max;
+    const x = data.length < 2 ? W : (i / (data.length - 1)) * W;
+    const y = H - PAD - Math.max(0, Math.min(1, (v - min) / (max - min))) * (H - 2 * PAD);
+    return [x, y];
+  }
+  function draw() {
+    if (!data.length) return;
+    path.setAttribute("d", data.map((d, i) => {
+      const [x, y] = coords(i, d.v); return (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+    }).join(" "));
+    card.querySelector(".now").textContent = data[data.length - 1].v;
+  }
+  svg.addEventListener("pointermove", (ev) => {
+    if (data.length < 2) return;
+    const rect = svg.getBoundingClientRect();
+    const i = Math.round((ev.clientX - rect.left) / rect.width * (data.length - 1));
+    const d = data[Math.max(0, Math.min(data.length - 1, i))];
+    const [x, y] = coords(i, d.v);
+    xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("opacity", ".6");
+    pt.setAttribute("cx", x); pt.setAttribute("cy", y); pt.setAttribute("opacity", "1");
+    tip.style.display = "block";
+    tip.style.left = Math.min(x / W * rect.width + 10, rect.width - 90) + "px";
+    tip.style.top = (y / H * 120 - 30) + "px";
+    tip.textContent = `${d.v} ${s.unit} · ${d.t}`;
+  });
+  svg.addEventListener("pointerleave", () => {
+    tip.style.display = "none"; xh.setAttribute("opacity", "0"); pt.setAttribute("opacity", "0");
+  });
+  return { push(v, t) { if (v == null) return; data.push({ v, t }); if (data.length > MAXPTS) data.shift(); draw(); } };
+});
+
+let perfTimer = null;
+async function samplePerf() {
+  try {
+    const snap = await api("/api/perf");
+    const t = new Date().toLocaleTimeString();
+    SERIES.forEach((s, i) => charts[i].push(s.pick(snap), t));
+    const rows = (snap.top_processes || []).map(p =>
+      `<tr><td>${p.pid}</td><td class="num">${p.cpu_percent.toFixed(1)}</td>
+       <td class="num">${p.mem_percent.toFixed(1)}</td><td>${p.name}</td></tr>`).join("");
+    $("#proc-table tbody").innerHTML = rows || `<tr><td colspan="4" class="empty">no process data</td></tr>`;
+    const th = await api("/api/thermal");
+    const hot = th.sensors.filter(x => ["SKIN","BATTERY","CPU","GPU"].includes(x.type))
+      .sort((a, b) => b.temperature_c - a.temperature_c).slice(0, 12);
+    $("#thermal-list").innerHTML = hot.map(x => `
+      <div class="thermal-row ${x.warning ? "hot" : ""}">
+        <span class="name">${x.name}</span>
+        <span class="bar"><i style="width:${Math.min(100, x.temperature_c / 60 * 100)}%"></i></span>
+        <span class="t">${x.temperature_c.toFixed(1)}°C</span>
+        <span style="color:var(--faint);font-size:10px">${x.type}</span>
+      </div>`).join("");
+  } catch (e) { /* keep sampling */ }
+}
+$("#btn-perf-toggle").addEventListener("click", () => {
+  const btn = $("#btn-perf-toggle");
+  if (perfTimer) { clearInterval(perfTimer); perfTimer = null; btn.textContent = "START MONITORING"; }
+  else { samplePerf(); perfTimer = setInterval(samplePerf, 2500); btn.textContent = "STOP"; }
+});
+
+/* ---------------- viewport ---------------- */
+let liveTimer = null;
+async function capture() {
+  const vp = $("#vp");
+  try {
+    $("#btn-shot").disabled = true;
+    const img = new Image();
+    img.src = "/api/screenshot?ts=" + Date.now();
+    await img.decode();
+    vp.innerHTML = ""; vp.appendChild(img);
+  } catch (e) { fail(new Error("capture failed — is the headset connected?")); }
+  finally { $("#btn-shot").disabled = false; }
+}
+$("#btn-shot").addEventListener("click", capture);
+$("#btn-live").addEventListener("click", () => {
+  const btn = $("#btn-live");
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; btn.textContent = "LIVE VIEW"; $("#cap-note").textContent = "left-eye view"; }
+  else { capture(); liveTimer = setInterval(capture, 4000); btn.textContent = "STOP LIVE"; $("#cap-note").textContent = "refreshing every 4 s"; }
+});
+$("#btn-rec").addEventListener("click", async () => {
+  const secs = $("#rec-secs").value, btn = $("#btn-rec");
+  btn.disabled = true; btn.textContent = `RECORDING ${secs}s…`;
+  $("#cap-note").textContent = "recording — do something in the headset";
+  try {
+    const rec = await api(`/api/record?seconds=${secs}`, { method: "POST" });
+    toast(`Saved ${rec.path} (${Math.round(rec.size_bytes / 1024)} KB)`);
+    const vp = $("#vp");
+    vp.innerHTML = `<video controls autoplay muted style="width:100%"
+      src="/api/recording?path=${encodeURIComponent(rec.path)}"></video>`;
+  } catch (e) { fail(e); }
+  finally { btn.disabled = false; btn.textContent = "RECORD"; $("#cap-note").textContent = "left-eye view"; }
+});
+
+/* ---------------- logs ---------------- */
+let logLevel = "W", followTimer = null;
+$("#lvl-chips").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button"); if (!b) return;
+  logLevel = b.dataset.l;
+  document.querySelectorAll("#lvl-chips button").forEach(x => x.classList.toggle("sel", x === b));
+});
+function renderLogs(entries, append) {
+  const view = $("#logview");
+  if (!append) view.innerHTML = "";
+  if (!entries.length && !view.children.length) {
+    view.innerHTML = `<div class="empty">no matching entries — lower the level or clear filters</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const e of entries) {
+    const div = document.createElement("div");
+    div.className = "logline";
+    div.innerHTML = `<span class="ts">${e.timestamp}</span><span class="lv lv-${e.level}">${e.level}</span>
+      <span class="tag"></span><span class="msg"></span>`;
+    div.querySelector(".tag").textContent = e.tag;
+    div.querySelector(".msg").textContent = e.message;
+    frag.appendChild(div);
+  }
+  view.appendChild(frag);
+  view.scrollTop = view.scrollHeight;
+}
+async function fetchLogs() {
+  try {
+    const q = new URLSearchParams({ level: logLevel, lines: 400 });
+    if ($("#log-tag").value) q.set("tag", $("#log-tag").value);
+    if ($("#log-grep").value) q.set("grep", $("#log-grep").value);
+    const r = await api("/api/logs?" + q);
+    renderLogs(r.entries, false);
+  } catch (e) { fail(e); }
+}
+$("#btn-logs").addEventListener("click", fetchLogs);
+$("#btn-logs-live").addEventListener("click", () => {
+  const btn = $("#btn-logs-live");
+  if (followTimer) { clearInterval(followTimer); followTimer = null; btn.textContent = "FOLLOW"; return; }
+  fetchLogs(); followTimer = setInterval(fetchLogs, 3000); btn.textContent = "STOP";
+});
+$("#btn-crashes").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/crashes");
+    const view = $("#crashview");
+    if (!r.count) { view.innerHTML = `<div class="empty">no crash reports in the system dropbox</div>`; return; }
+    view.innerHTML = r.crashes.map(c => `
+      <div class="crash">
+        <div class="meta">${c.crash_type} · ${c.package} · ${c.timestamp}</div>
+        <pre></pre>
+      </div>`).join("");
+    view.querySelectorAll("pre").forEach((pre, i) => pre.textContent = r.crashes[i].stack_trace);
+  } catch (e) { fail(e); }
+});
+
+/* ---------------- apps ---------------- */
+async function loadApps() {
+  try {
+    const filter = $("#app-filter").value;
+    const r = await api("/api/apps?filter=" + filter);
+    $("#apps-note").textContent = r.count + " packages";
+    const tbody = $("#apps-table tbody");
+    if (!r.packages.length) { tbody.innerHTML = `<tr><td colspan="2" class="empty">no ${filter} apps</td></tr>`; return; }
+    tbody.innerHTML = r.packages.map(p => `
+      <tr><td>${p}</td><td><div class="actions">
+        <button data-act="launch" data-p="${p}">LAUNCH</button>
+        <button data-act="stop" data-p="${p}">STOP</button>
+        <button data-act="clear" data-p="${p}" class="danger">CLEAR</button>
+        <button data-act="uninstall" data-p="${p}" class="danger">UNINSTALL</button>
+      </div></td></tr>`).join("");
+  } catch (e) { fail(e); }
+}
+$("#btn-apps").addEventListener("click", loadApps);
+$("#app-filter").addEventListener("change", loadApps);
+$("#apps-table").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button"); if (!b) return;
+  const { act, p } = b.dataset;
+  if ((act === "uninstall" || act === "clear") &&
+      !confirm(`${act === "uninstall" ? "Uninstall" : "Clear all data for"} ${p}?`)) return;
+  b.disabled = true;
+  try {
+    const r = await api(`/api/apps/${act}?package=${encodeURIComponent(p)}`, { method: "POST" });
+    toast(r.message);
+    if (act === "uninstall") loadApps();
+  } catch (e) { fail(e); }
+  finally { b.disabled = false; }
+});
+$("#apk-file").addEventListener("change", async (ev) => {
+  const file = ev.target.files[0]; if (!file) return;
+  toast(`Installing ${file.name} — large APKs take a while…`);
+  const form = new FormData(); form.append("file", file);
+  try {
+    const r = await api("/api/apps/install", { method: "POST", body: form });
+    toast(r.message); loadApps();
+  } catch (e) { fail(e); }
+  ev.target.value = "";
+});
+
+/* ---------------- files ---------------- */
+let cwd = "/sdcard/";
+function human(n) {
+  if (n == null) return "";
+  for (const u of ["B", "KB", "MB", "GB"]) { if (n < 1024) return n.toFixed(0) + " " + u; n /= 1024; }
+  return n.toFixed(1) + " TB";
+}
+async function loadFiles(path) {
+  cwd = path.endsWith("/") ? path : path + "/";
+  const parts = cwd.split("/").filter(Boolean);
+  $("#crumbs").innerHTML = `<a data-p="/">/</a> ` + parts.map((p, i) =>
+    `<a data-p="/${parts.slice(0, i + 1).join("/")}/">${p}</a> /`).join(" ");
+  try {
+    const r = await api("/api/files?path=" + encodeURIComponent(cwd));
+    const tbody = $("#files-table tbody");
+    const dirs = r.entries.filter(e => e.is_dir), fs = r.entries.filter(e => !e.is_dir);
+    const row = (e) => `
+      <tr><td>${e.is_dir ? `<a style="color:var(--lens);cursor:pointer" data-dir="${e.name}">${e.name}/</a>` : e.name}</td>
+      <td class="num">${e.is_dir ? "" : human(e.size)}</td><td>${e.modified || ""}</td>
+      <td>${e.is_dir ? "" : `<div class="actions"><button data-dl="${e.name}">PULL</button>
+        <button data-del="${e.name}" class="danger">DELETE</button></div>`}</td></tr>`;
+    tbody.innerHTML = [...dirs, ...fs].map(row).join("") ||
+      `<tr><td colspan="4" class="empty">empty directory</td></tr>`;
+    $("#files-note").textContent = cwd;
+  } catch (e) { fail(e); }
+}
+$("#crumbs").addEventListener("click", (ev) => {
+  const a = ev.target.closest("a"); if (a) loadFiles(a.dataset.p);
+});
+$("#files-table").addEventListener("click", async (ev) => {
+  const dir = ev.target.closest("[data-dir]");
+  if (dir) return loadFiles(cwd + dir.dataset.dir);
+  const dl = ev.target.closest("[data-dl]");
+  if (dl) { window.open("/api/files/download?path=" + encodeURIComponent(cwd + dl.dataset.dl)); return; }
+  const del = ev.target.closest("[data-del]");
+  if (del && confirm(`Delete ${cwd + del.dataset.del} from the device?`)) {
+    try {
+      await api("/api/files/delete?path=" + encodeURIComponent(cwd + del.dataset.del), { method: "POST" });
+      toast("Deleted"); loadFiles(cwd);
+    } catch (e) { fail(e); }
+  }
+});
+$("#up-file").addEventListener("change", async (ev) => {
+  const file = ev.target.files[0]; if (!file) return;
+  const form = new FormData(); form.append("file", file);
+  try {
+    const r = await api("/api/files/upload?path=" + encodeURIComponent(cwd), { method: "POST", body: form });
+    toast(r.message); loadFiles(cwd);
+  } catch (e) { fail(e); }
+  ev.target.value = "";
+});
+
+/* lazy-load section data on first visit (including direct #hash loads) */
+const loaded = new Set();
+function lazyLoad() {
+  const id = location.hash.slice(1);
+  if (loaded.has(id)) return; loaded.add(id);
+  if (id === "apps") loadApps();
+  if (id === "files") loadFiles("/sdcard/");
+}
+window.addEventListener("hashchange", lazyLoad);
+lazyLoad();
+</script>
+</body>
+</html>

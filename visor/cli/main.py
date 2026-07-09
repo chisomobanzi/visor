@@ -583,5 +583,17 @@ def sensors():
     console.print(table)
 
 
+@app.command()
+def ui(
+    port: int = typer.Option(7700, "--port", "-p"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Don't open a browser"),
+):
+    """Launch the visor web dashboard (localhost only)."""
+    from visor.ui.server import main as ui_main
+
+    console.print(f"[green]visor dashboard[/green] → http://127.0.0.1:{port}  [dim](ctrl-c to stop)[/dim]")
+    ui_main(port=port, open_browser=not no_browser)
+
+
 if __name__ == "__main__":
     app()
