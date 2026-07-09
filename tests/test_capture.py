@@ -77,6 +77,35 @@ class TestScreenRecord:
         assert "rm" in cleanup_cmd
 
 
+class TestScreenStream:
+    def test_missing_ffmpeg_raises_helpful_error(self, adb):
+        from visor.adb.capture import start_screen_stream
+        from visor.adb.wrapper import ADBCommandError
+
+        with mock.patch("shutil.which", return_value=None):
+            with pytest.raises(ADBCommandError, match="ffmpeg"):
+                start_screen_stream("S", adb=adb)
+
+    def test_pipeline_command_construction(self, adb):
+        from visor.adb.capture import start_screen_stream
+
+        adb.adb_path = "/usr/bin/adb"
+        with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with mock.patch("subprocess.Popen") as popen:
+                popen.return_value.stdout = mock.Mock()
+                start_screen_stream("S", fps=20, adb=adb)
+        adb_cmd = popen.call_args_list[0].args[0]
+        ff_cmd = popen.call_args_list[1].args[0]
+        assert adb_cmd[:3] == ["/usr/bin/adb", "-s", "S"]
+        assert "screenrecord" in adb_cmd and "--output-format=h264" in adb_cmd
+        assert "mpjpeg" in ff_cmd
+        assert any("fps=20" in part for part in ff_cmd)
+        # left-eye crop on by default (Quest renders side-by-side stereo)
+        assert any("crop=iw/2" in part for part in ff_cmd)
+        # ffmpeg reads from the adb process's stdout
+        assert popen.call_args_list[1].kwargs["stdin"] is popen.return_value.stdout
+
+
 class TestCast:
     def test_missing_scrcpy_raises_helpful_error(self, adb):
         from visor.adb.wrapper import ADBCommandError

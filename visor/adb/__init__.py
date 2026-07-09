@@ -9,7 +9,13 @@ from visor.adb.apps import (
     stop_app,
     uninstall_app,
 )
-from visor.adb.capture import screen_record, screenshot, start_cast
+from visor.adb.capture import (
+    screen_record,
+    screenshot,
+    start_cast,
+    start_screen_stream,
+    stop_stream_processes,
+)
 from visor.adb.device import (
     connect_wireless,
     discover_devices,

@@ -16,7 +16,7 @@ Four layers, one library:
 - Linux, Python 3.10+
 - `adb` (`sudo apt install android-sdk-platform-tools` / `sudo pacman -S android-tools`)
 - A Quest with [developer mode enabled](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/), connected via USB (accept the debugging prompt in the headset) or wireless ADB
-- Optional: `scrcpy` for live casting
+- Optional: `ffmpeg` for the dashboard's live video view, `scrcpy` for casting
 
 ## Install
 
@@ -74,7 +74,7 @@ Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install
 visor ui        # opens http://127.0.0.1:7700
 ```
 
-Overview (battery/thermal lens gauges, tracking status), viewport capture with live view, performance charts sampled every 2.5s, filterable log viewer with crash reports, app management (install APK by upload, launch/stop/clear/uninstall), and a device file browser. Localhost-only by design.
+Overview (battery/thermal lens gauges, tracking status), viewport with **real-time live video** (H.264 off the device via `screenrecord`, transcoded to an MJPEG stream — requires ffmpeg), performance charts sampled every 2.5s, filterable log viewer with crash reports, app management (install APK by upload, launch/stop/clear/uninstall), and a device file browser. Localhost-only by design.
 
 ## Library
 

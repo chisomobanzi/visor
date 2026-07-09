@@ -260,7 +260,7 @@
         <span class="note" id="cap-note">left-eye view</span>
       </div>
       <div class="viewport" id="vp">
-        <div class="hint">Press CAPTURE to see what's on the headset.<br>LIVE VIEW refreshes every few seconds.</div>
+        <div class="hint">Press CAPTURE to see what's on the headset.<br>LIVE VIEW streams real-time video.</div>
       </div>
     </section>
 
@@ -546,7 +546,7 @@ $("#btn-perf-toggle").addEventListener("click", () => {
 });
 
 /* ---------------- viewport ---------------- */
-let liveTimer = null;
+let streaming = false;
 async function capture() {
   const vp = $("#vp");
   try {
@@ -558,12 +558,37 @@ async function capture() {
   } catch (e) { fail(new Error("capture failed — is the headset connected?")); }
   finally { $("#btn-shot").disabled = false; }
 }
-$("#btn-shot").addEventListener("click", capture);
-$("#btn-live").addEventListener("click", () => {
-  const btn = $("#btn-live");
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; btn.textContent = "LIVE VIEW"; $("#cap-note").textContent = "left-eye view"; }
-  else { capture(); liveTimer = setInterval(capture, 4000); btn.textContent = "STOP LIVE"; $("#cap-note").textContent = "refreshing every 4 s"; }
-});
+$("#btn-shot").addEventListener("click", () => { if (!streaming) capture(); });
+
+function stopStream() {
+  streaming = false;
+  const vp = $("#vp");
+  const img = vp.querySelector("img");
+  // reassigning src aborts the multipart request (removing the node alone
+  // doesn't — Chrome keeps the connection open); the server stop is
+  // belt-and-braces so the adb/ffmpeg pipeline dies immediately
+  if (img) img.src = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+  api("/api/stream/stop", { method: "POST" }).catch(() => {});
+  vp.innerHTML = `<div class="hint">Press CAPTURE to see what's on the headset.<br>LIVE VIEW streams real-time video.</div>`;
+  $("#btn-live").textContent = "LIVE VIEW";
+  $("#cap-note").textContent = "left-eye view";
+}
+function startStream() {
+  const vp = $("#vp");
+  streaming = true;
+  const img = new Image();
+  img.alt = "live headset stream";
+  img.src = "/api/stream?ts=" + Date.now();
+  img.addEventListener("error", () => {
+    if (!streaming) return;
+    stopStream();
+    fail(new Error("live stream failed — check the headset connection and that ffmpeg is installed (sudo apt install ffmpeg)"));
+  });
+  vp.innerHTML = ""; vp.appendChild(img);
+  $("#btn-live").textContent = "STOP LIVE";
+  $("#cap-note").textContent = "live H.264 stream · left eye";
+}
+$("#btn-live").addEventListener("click", () => (streaming ? stopStream() : startStream()));
 $("#btn-rec").addEventListener("click", async () => {
   const secs = $("#rec-secs").value, btn = $("#btn-rec");
   btn.disabled = true; btn.textContent = `RECORDING ${secs}s…`;

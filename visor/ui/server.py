@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    Response,
+    StreamingResponse,
+)
 
 from visor import adb
 from visor.adb.wrapper import VisorError
@@ -88,6 +93,90 @@ def screenshot(device: Optional[str] = None, eye: str = "left"):
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store"},
     )
+
+
+# serial -> (adb_proc, ffmpeg_proc) of the current live stream (last-wins)
+_active_streams: dict = {}
+
+
+def _wake_display(serial: str, restore: bool = False):
+    action = "automation_disable" if restore else "prox_close"
+    try:
+        adb.get_adb().shell(
+            f"am broadcast -a com.oculus.vrpowermanager.{action}", device_id=serial
+        )
+    except VisorError:
+        pass
+
+
+@app.get("/api/stream")
+async def stream(device: Optional[str] = None, fps: int = 15):
+    """Live MJPEG stream of the headset screen (multipart/x-mixed-replace).
+
+    Renders directly in an <img> tag. Restarts the underlying screenrecord
+    transparently when Android's 180s cap is hit. Must be an async
+    generator: Starlette only cancels those promptly on client disconnect,
+    and cancellation is what tears down the adb/ffmpeg pipeline.
+    """
+    import os as _os
+
+    import anyio
+
+    serial = _device(device)
+    _wake_display(serial)
+
+    # last-wins: a new viewer replaces any existing stream for this device
+    old = _active_streams.pop(serial, None)
+    if old:
+        adb.stop_stream_processes(*old)
+    try:
+        procs = adb.start_screen_stream(serial, fps=fps)
+    except VisorError as e:
+        raise HTTPException(503, str(e)) from None
+    _active_streams[serial] = procs
+
+    async def gen():
+        current = procs
+        try:
+            while True:
+                chunk = await anyio.to_thread.run_sync(
+                    _os.read, current[1].stdout.fileno(), 65536,
+                    abandon_on_cancel=True,
+                )
+                if chunk:
+                    yield chunk
+                    continue
+                # EOF: 180s screenrecord cap (or device gone) — respawn if
+                # we're still the active stream for this device
+                if _active_streams.get(serial) is not current:
+                    break
+                adb.stop_stream_processes(*current)
+                try:
+                    current = adb.start_screen_stream(serial, fps=fps)
+                except VisorError:
+                    break
+                _active_streams[serial] = current
+        finally:
+            adb.stop_stream_processes(*current)
+            if _active_streams.get(serial) is current:
+                _active_streams.pop(serial, None)
+                _wake_display(serial, restore=True)
+
+    return StreamingResponse(
+        gen(), media_type="multipart/x-mixed-replace; boundary=ffmpeg"
+    )
+
+
+@app.post("/api/stream/stop")
+def stream_stop(device: Optional[str] = None):
+    """Kill the active live stream server-side. Belt-and-braces: browsers
+    don't always close the multipart connection when the <img> goes away."""
+    serial = _device(device)
+    procs = _active_streams.pop(serial, None)
+    if procs:
+        adb.stop_stream_processes(*procs)
+        _wake_display(serial, restore=True)
+    return {"stopped": procs is not None}
 
 
 @app.post("/api/record")

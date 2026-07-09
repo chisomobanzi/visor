@@ -150,6 +150,75 @@ def screen_record(
     )
 
 
+def start_screen_stream(
+    device_id: Optional[str] = None,
+    size: str = "1664x896",
+    fps: int = 15,
+    quality: int = 7,
+    bit_rate: str = "8M",
+    crop_left_eye: bool = True,
+    adb: Optional[ADBWrapper] = None,
+) -> tuple[subprocess.Popen, subprocess.Popen]:
+    """Start a live MJPEG stream of the headset screen.
+
+    Pipes `adb exec-out screenrecord --output-format=h264 -` (continuous
+    H.264, the same mechanism scrcpy uses) through ffmpeg into an MJPEG
+    multipart stream (boundary "ffmpeg") readable straight from the
+    returned ffmpeg process's stdout — browsers render it natively in an
+    <img> tag.
+
+    Returns (adb_process, ffmpeg_process). Caller owns cleanup: terminate
+    both when done. Android caps each screenrecord run at 180s, so a
+    long-lived consumer must respawn on EOF.
+    """
+    adb = adb or get_adb()
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise ADBCommandError(
+            "ffmpeg is required for live streaming — install it, e.g. "
+            "`sudo apt install ffmpeg`."
+        )
+
+    adb_cmd = [adb.adb_path]
+    if device_id:
+        adb_cmd += ["-s", device_id]
+    adb_cmd += [
+        "exec-out", "screenrecord", "--output-format=h264",
+        "--size", size, "--bit-rate", bit_rate, "-",
+    ]
+    vf = ("crop=iw/2:ih:0:0," if crop_left_eye else "") + f"fps={fps}"
+    ffmpeg_cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-f", "h264", "-i", "-",
+        "-vf", vf, "-q:v", str(quality), "-f", "mpjpeg", "-",
+    ]
+
+    adb_proc = subprocess.Popen(
+        adb_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+    ffmpeg_proc = subprocess.Popen(
+        ffmpeg_cmd,
+        stdin=adb_proc.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    adb_proc.stdout.close()  # let ffmpeg own the pipe so adb gets SIGPIPE
+    return adb_proc, ffmpeg_proc
+
+
+def stop_stream_processes(*procs: subprocess.Popen) -> None:
+    """Terminate stream processes, escalating to kill."""
+    for proc in procs:
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in procs:
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()  # reap, or the killed process lingers as a zombie
+
+
 def start_cast(
     device_id: Optional[str] = None,
     adb: Optional[ADBWrapper] = None,
