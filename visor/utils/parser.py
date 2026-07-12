@@ -172,6 +172,31 @@ def parse_package_list(output: str) -> list[str]:
     ]
 
 
+_MEMINFO_SUMMARY_LABELS = {
+    "Java Heap": "java_heap_kb",
+    "Native Heap": "native_heap_kb",
+    "Code": "code_kb",
+    "Stack": "stack_kb",
+    "Graphics": "graphics_kb",
+    "Private Other": "private_other_kb",
+    "System": "system_kb",
+    "TOTAL PSS": "total_pss_kb",
+}
+
+
+def parse_meminfo_summary(output: str) -> Optional[dict]:
+    """Parse the App Summary block of `dumpsys meminfo <package>` into
+    PSS by category (KB). Graphics is the one that kills VR apps."""
+    if "App Summary" not in output:
+        return None
+    summary_block = output.split("App Summary", 1)[1]
+    result: dict = {}
+    for label, key in _MEMINFO_SUMMARY_LABELS.items():
+        if m := re.search(rf"{re.escape(label)}:\s+(\d+)", summary_block):
+            result[key] = int(m.group(1))
+    return result or None
+
+
 def parse_thermalservice(output: str) -> dict:
     """Parse `dumpsys thermalservice` into overall status + temperature sensors.
 

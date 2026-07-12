@@ -1,0 +1,53 @@
+Applications Memory Usage (in Kilobytes):
+Uptime: 575006 Realtime: 575006
+
+** MEMINFO in pid 8864 [com.speakeasy3d.voyager] **
+                   Pss  Private  Private     Swap      Rss     Heap     Heap     Heap
+                 Total    Dirty    Clean    Dirty    Total     Size    Alloc     Free
+                ------   ------   ------   ------   ------   ------   ------   ------
+  Native Heap    24921    24464        0        0    28480    37852    34056     3795
+  Dalvik Heap     2314     2192        0        0    10148     6050     3030     3020
+ Dalvik Other     5081     1536        0        0     9100                           
+        Stack     3052     3000        0        0     3112                           
+       Ashmem      199        0        0        0     1116                           
+      Gfx dev    73344    73312       32        0    73348                           
+    Other dev       26        0       24        0      428                           
+     .so mmap   209398     3360   189160        0   295244                           
+    .jar mmap     2531        0       12        0    42992                           
+    .apk mmap     9162      452     6792        0    16700                           
+    .ttf mmap       57        0        0        0      256                           
+    .dex mmap     1319       16      184        0     5472                           
+    .oat mmap       36        0        0        0     1532                           
+    .art mmap     6755     3996       36        0    27884                           
+   Other mmap       23        4        0        0      908                           
+   EGL mtrack    65010    65010        0        0    65010                           
+    GL mtrack   297940   297940        0        0   297940                           
+      Unknown   291403   290252      144        0   293224                           
+        TOTAL   992571   765534   196384        0  1172894    43902    37086     6815
+ 
+ App Summary for pid : 8864, and process : com.speakeasy3d.voyager
+                       Pss(KB)                        Rss(KB)
+                        ------                         ------
+           Java Heap:     6224                          38032
+         Native Heap:    24464                          28480
+                Code:   200016                         369180
+               Stack:     3000                           3112
+            Graphics:   436294                         436298
+       Private Other:   291920
+              System:    30653
+             Unknown:                                  297792
+ 
+           TOTAL PSS:   992571            TOTAL RSS:  1172894      TOTAL SWAP (KB):        0
+ 
+ Objects
+               Views:       16         ViewRootImpl:        1
+         AppContexts:       10           Activities:        1
+              Assets:        7        AssetManagers:        0
+       Local Binders:       29        Proxy Binders:       46
+       Parcel memory:       13         Parcel count:       58
+    Death Recipients:        1             WebViews:        0
+ 
+ SQL
+         MEMORY_USED:        0
+  PAGECACHE_OVERFLOW:        0          MALLOC_SIZE:        0
+ 
