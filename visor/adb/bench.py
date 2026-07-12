@@ -51,7 +51,7 @@ def resolve_launch_component(
     output = adb.shell(
         f"cmd package resolve-activity --brief {package}", device_id=device_id
     )
-    lines = [l.strip() for l in output.splitlines() if "/" in l]
+    lines = [line.strip() for line in output.splitlines() if "/" in line]
     if not lines:
         raise ADBCommandError(f"{package} has no launchable activity.")
     return lines[-1]

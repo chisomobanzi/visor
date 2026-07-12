@@ -100,7 +100,7 @@ class TestParseVrApiLine:
 class TestFixture:
     def test_parses_entire_real_capture(self):
         lines = FIXTURE.read_text().splitlines()
-        samples = [s for s in (parse_vrapi_line(l) for l in lines) if s]
+        samples = [s for s in (parse_vrapi_line(line) for line in lines) if s]
         assert len(samples) >= 60
         pids = {s.pid for s in samples}
         assert len(pids) == 2  # game + runtime both emit

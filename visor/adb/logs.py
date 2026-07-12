@@ -43,7 +43,7 @@ def logcat_dump(
     args += _logcat_filter_args(tag, level)
     output = adb.run(args, device_id=device_id, timeout=30)
 
-    entries = [e for e in (parse_logcat_line(l) for l in output.splitlines()) if e]
+    entries = [e for e in (parse_logcat_line(line) for line in output.splitlines()) if e]
     if pattern:
         rx = re.compile(pattern, re.IGNORECASE)
         entries = [e for e in entries if rx.search(e.message) or rx.search(e.tag)]
