@@ -55,7 +55,7 @@ def _call(fn, *args, **kwargs):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (_STATIC / "index.html").read_text()
+    return (_STATIC / "index.html").read_text(encoding="utf-8")
 
 
 @app.get("/api/devices")
@@ -169,7 +169,7 @@ def perf_sessions():
     sessions = []
     for path in sorted(_sessions_dir().glob("*.json"), reverse=True):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = _json.load(f)
             sessions.append({
                 "name": path.name,

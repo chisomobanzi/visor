@@ -1,5 +1,6 @@
 """Tests for screenshot, screen recording, casting."""
 
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -54,7 +55,7 @@ class TestScreenshot:
         adb.run.return_value = PNG_BYTES
         result = screenshot("S", adb=adb)
         assert result.path.endswith(".png")
-        assert "screenshots/" in result.path
+        assert Path(result.path).parent.name == "screenshots"
 
 
 class TestScreenRecord:

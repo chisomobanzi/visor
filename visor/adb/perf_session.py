@@ -47,12 +47,12 @@ class PerfSession:
 
 
 def save_session(session: PerfSession, path: str) -> None:
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(session.to_dict(), f, indent=1)
 
 
 def load_session(path: str) -> PerfSession:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     data.pop("schema", None)
     return PerfSession(**data)
