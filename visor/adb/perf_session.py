@@ -61,17 +61,28 @@ def load_session(path: str) -> PerfSession:
 # --------------------------------------------------------------- events
 
 
+def _level_holds(vrapi: list, i: int, key: str) -> bool:
+    """Debounce CPU/GPU level events: the governor oscillates between
+    adjacent levels every second, which isn't a moment worth annotating.
+    A change only counts if the new level persists in the next sample;
+    a change on the final sample can't be confirmed, so it doesn't count."""
+    if i + 1 >= len(vrapi):
+        return False
+    nxt = vrapi[i + 1].get(key)
+    return nxt is None or nxt == vrapi[i][key]
+
+
 def derive_events(vrapi: list, thermal: list) -> list:
     """Turn raw sample streams into annotated moments worth looking at."""
     events = []
 
     prev = None
-    for s in vrapi:
+    for i, s in enumerate(vrapi):
         if prev is not None:
             for key, kind in (("gpu_level", "gpu_level_change"),
                               ("cpu_level", "cpu_level_change")):
                 if s.get(key) is not None and prev.get(key) is not None \
-                        and s[key] != prev[key]:
+                        and s[key] != prev[key] and _level_holds(vrapi, i, key):
                     events.append({
                         "elapsed_s": s["elapsed_s"],
                         "kind": kind,

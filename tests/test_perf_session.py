@@ -70,6 +70,20 @@ class TestDeriveEvents:
         samples = [sample(i) for i in range(5)]
         assert derive_events(vrapi=samples, thermal=[]) == []
 
+    def test_level_oscillation_debounced(self):
+        # governor bouncing 2-3-2-3 every second is noise, not events
+        samples = [sample(i, cpu_level=2 + (i % 2)) for i in range(10)]
+        events = derive_events(vrapi=samples, thermal=[])
+        assert [e for e in events if e["kind"] == "cpu_level_change"] == []
+
+    def test_sustained_level_change_still_reported(self):
+        samples = [sample(i, gpu_level=3) for i in range(4)] + \
+                  [sample(4 + i, gpu_level=5) for i in range(4)]
+        events = derive_events(vrapi=samples, thermal=[])
+        changes = [e for e in events if e["kind"] == "gpu_level_change"]
+        assert len(changes) == 1
+        assert changes[0]["detail"] == "3 -> 5"
+
 
 class TestSummary:
     def test_summary_stats(self):

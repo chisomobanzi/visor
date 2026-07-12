@@ -98,6 +98,115 @@ def screenshot(device: Optional[str] = None, eye: str = "left"):
 # serial -> (adb_proc, ffmpeg_proc) of the current live stream (last-wins)
 _active_streams: dict = {}
 
+# serial -> LiveRecorder for the in-progress perf session (last-wins)
+_active_recorders: dict = {}
+
+
+def _sessions_dir() -> Path:
+    path = Path.home() / ".visor" / "sessions"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _session_file(name: str) -> Path:
+    """Resolve a session by basename only — no path traversal."""
+    candidate = _sessions_dir() / Path(name).name
+    if not candidate.is_file():
+        raise HTTPException(404, f"no such session: {Path(name).name}")
+    return candidate
+
+
+@app.post("/api/perf/session/start")
+def perf_session_start(package: Optional[str] = None, device: Optional[str] = None):
+    from visor.adb.perf_session import LiveRecorder
+
+    serial = _device(device)
+    old = _active_recorders.pop(serial, None)
+    if old:
+        old.stop()
+    recorder = LiveRecorder(serial, package=package or None)
+    _call(recorder.start)
+    _active_recorders[serial] = recorder
+    return {"package": recorder.package, "recording": True}
+
+
+@app.get("/api/perf/session/live")
+def perf_session_live(device: Optional[str] = None):
+    serial = _device(device)
+    recorder = _active_recorders.get(serial)
+    if not recorder:
+        raise HTTPException(404, "no session recording — start one first")
+    return recorder.snapshot()
+
+
+@app.post("/api/perf/session/stop")
+def perf_session_stop(device: Optional[str] = None):
+    import time as _time
+
+    from visor.adb.diagnosis import diagnose_session
+    from visor.adb.perf_session import save_session, summarize_session
+
+    serial = _device(device)
+    recorder = _active_recorders.pop(serial, None)
+    if not recorder:
+        raise HTTPException(404, "no session recording")
+    session = recorder.stop()
+    stamp = _time.strftime("%Y%m%d-%H%M%S")
+    name = f"{(session.package or 'unknown').replace('.', '_')}-{stamp}.json"
+    save_session(session, str(_sessions_dir() / name))
+    return {
+        "name": name,
+        "summary": summarize_session(session),
+        "diagnosis": diagnose_session(session),
+        "session": session.to_dict(),
+    }
+
+
+@app.get("/api/perf/sessions")
+def perf_sessions():
+    import json as _json
+
+    sessions = []
+    for path in sorted(_sessions_dir().glob("*.json"), reverse=True):
+        try:
+            with open(path) as f:
+                data = _json.load(f)
+            sessions.append({
+                "name": path.name,
+                "package": data.get("package"),
+                "started_at": data.get("started_at"),
+                "duration_s": data.get("duration_s"),
+                "samples": len(data.get("vrapi", [])),
+            })
+        except (OSError, ValueError):
+            continue
+    return {"sessions": sessions}
+
+
+@app.get("/api/perf/session")
+def perf_session_get(name: str):
+    from visor.adb.diagnosis import diagnose_session
+    from visor.adb.perf_session import load_session, summarize_session
+
+    session = load_session(str(_session_file(name)))
+    return {
+        "name": Path(name).name,
+        "session": session.to_dict(),
+        "summary": summarize_session(session),
+        "diagnosis": diagnose_session(session),
+    }
+
+
+@app.get("/api/perf/diff")
+def perf_diff(before: str, after: str):
+    from visor.adb.diagnosis import diff_sessions
+    from visor.adb.perf_session import load_session
+
+    return diff_sessions(
+        load_session(str(_session_file(before))),
+        load_session(str(_session_file(after))),
+    )
+
 
 def _wake_display(serial: str, restore: bool = False):
     action = "automation_disable" if restore else "prox_close"

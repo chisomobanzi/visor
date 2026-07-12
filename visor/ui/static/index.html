@@ -145,6 +145,44 @@
     font-family: var(--mono); font-size: 11px; display: none; white-space: nowrap; z-index: 3;
   }
 
+  /* ---------- perf workspace ---------- */
+  #btn-rec-session.recording { border-color: var(--bad); color: var(--bad); }
+  .diag { border-left: 3px solid var(--good); border-radius: 0 10px 10px 0; margin-bottom: 14px; }
+  .diag.warning { border-left-color: var(--warn); }
+  .diag.critical { border-left-color: var(--bad); }
+  .diag .verdict {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+    text-transform: uppercase; padding: 2px 10px; border-radius: 999px;
+    border: 1px solid var(--line); margin-right: 10px;
+  }
+  .diag.healthy .verdict { color: var(--good); border-color: rgba(47,163,107,.5); }
+  .diag.warning .verdict { color: var(--warn); border-color: rgba(201,133,0,.5); }
+  .diag.critical .verdict { color: var(--bad); border-color: rgba(230,103,103,.5); }
+  .diag .headline { font-size: 14px; }
+  .diag details { margin-top: 10px; }
+  .diag summary { cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .diag summary:hover { color: var(--ink); }
+  .diag ul { margin: 6px 0 4px 22px; font-size: 12.5px; color: var(--muted); }
+  .diag .rec-label { color: var(--faint); font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+  .pchart { margin-bottom: 12px; }
+  .pchart h3 {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    font-weight: 500; color: var(--muted); display: flex; gap: 14px;
+    align-items: baseline; flex-wrap: wrap;
+  }
+  .pchart .lg { display: inline-flex; gap: 5px; align-items: center; font-size: 10px; color: var(--faint); }
+  .pchart .lg i { width: 14px; height: 2px; display: inline-block; }
+  .pchart .lg i.dash { background: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 6px); height: 2px; }
+  .stat-strip { display: flex; gap: 22px; flex-wrap: wrap; margin-bottom: 14px; }
+  .stat-strip .stat b { font-size: 20px; font-weight: 350; font-family: var(--mono); display: block; }
+  .stat-strip .stat span { font-family: var(--mono); font-size: 9px; letter-spacing: .13em; color: var(--faint); text-transform: uppercase; }
+  .event-row { display: flex; gap: 12px; font-family: var(--mono); font-size: 12px; padding: 4px 0; border-bottom: 1px solid rgba(42,48,59,.4); }
+  .event-row:last-child { border-bottom: 0; }
+  .event-row .t { color: var(--faint); min-width: 52px; text-align: right; }
+  .event-row .k { color: var(--warn); min-width: 150px; }
+  .difftable td.better { color: var(--good); }
+  .difftable td.worse { color: var(--bad); }
+
   /* ---------- logs ---------- */
   .logbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
   .lvl-chips { display: flex; gap: 4px; }
@@ -267,17 +305,29 @@
     <!-- ================= PERFORMANCE ================= -->
     <section id="performance">
       <div class="capbar">
-        <button id="btn-perf-toggle">START MONITORING</button>
-        <span class="note" id="perf-note">samples every 2.5 s while running</span>
+        <select id="perf-app" aria-label="App to profile">
+          <option value="">— foreground app —</option>
+        </select>
+        <button id="btn-rec-session" class="rec">● RECORD</button>
+        <span class="note" id="rec-status"></span>
+        <span style="flex:1"></span>
+        <select id="session-picker" aria-label="Load a recorded session">
+          <option value="">load session…</option>
+        </select>
+        <select id="diff-picker" aria-label="Compare with session" hidden>
+          <option value="">compare with…</option>
+        </select>
+        <button id="btn-export" hidden>EXPORT</button>
       </div>
-      <div class="grid cards2" id="charts"></div>
-      <h2>Top processes</h2>
-      <div class="card"><table id="proc-table">
-        <thead><tr><th>PID</th><th class="num">CPU %</th><th class="num">MEM %</th><th>Process</th></tr></thead>
-        <tbody><tr><td colspan="4" class="empty">start monitoring to sample processes</td></tr></tbody>
-      </table></div>
-      <h2>Thermal sensors</h2>
-      <div class="card" id="thermal-list"><div class="empty">start monitoring to read sensors</div></div>
+      <div id="diag-card"></div>
+      <div id="diff-view"></div>
+      <div id="perf-charts"></div>
+      <div id="perf-empty" class="card"><div class="empty">
+        Press ● RECORD while your app runs in the headset, or load a saved
+        session. Frame metrics flow only while a VR app is rendering.
+      </div></div>
+      <h2 id="events-h" hidden>Events</h2>
+      <div class="card" id="event-list" hidden></div>
     </section>
 
     <!-- ================= LOGS ================= -->
@@ -447,102 +497,320 @@ $("#btn-wireless").addEventListener("click", async () => {
   } catch (e) { fail(e); }
 });
 
-/* ---------------- charts ---------------- */
-const SERIES = [
-  { key: "cpu",  title: "CPU",       unit: "%",  color: "var(--s-cpu)",  max: 100,
-    pick: s => s.cpu?.usage_percent },
-  { key: "mem",  title: "MEMORY",    unit: "%",  color: "var(--s-mem)",  max: 100,
-    pick: s => memPercent(s.memory) },
-  { key: "temp", title: "SKIN TEMP", unit: "°C", color: "var(--s-temp)", min: 20, max: 50,
-    pick: s => s.thermal?.max_skin_temp_c },
-  { key: "batt", title: "BATTERY",   unit: "%",  color: "var(--s-batt)", max: 100,
-    pick: s => s.battery?.level },
-];
-function memPercent(m) {
-  if (!m?.total || !m?.used) return null;
-  const parse = v => parseFloat(v) * ({ K: 1, M: 1024, G: 1048576 }[v.replace(/[\d.]/g, "")[0]] || 1);
-  const total = parse(m.total), used = parse(m.used);
-  return total ? +(used / total * 100).toFixed(1) : null;
-}
-const W = 460, H = 120, PAD = 6, MAXPTS = 120;
-const charts = SERIES.map(s => {
+/* ============ performance workspace ============ */
+/* Series palette (CVD-validated for the dark surface) */
+const C = { blue: "#3987e5", aqua: "#199e70", yellow: "#c98500", red: "#e66767", gray: "#5a6272" };
+
+const PW = 920, PH = 130, PPAD = { l: 44, r: 10, t: 8, b: 16 };
+
+// Generic timeseries chart: multi-series, reference lines, event ticks,
+// stale markers, crosshair tooltip. Data = array of sample objects with
+// elapsed_s; each series picks its value from a sample.
+function tsChart(cfg, data, events) {
+  const xs = data.map(d => d.elapsed_s);
+  const xMax = Math.max(10, ...xs);
+  let vals = [];
+  cfg.series.forEach(s => data.forEach(d => { const v = s.pick(d); if (v != null) vals.push(v); }));
+  (cfg.refLines || []).forEach(r => vals.push(r.value));
+  if (!vals.length) return null;
+  let yMin = cfg.yMin ?? Math.min(...vals), yMax = cfg.yMax ?? Math.max(...vals);
+  if (yMax === yMin) { yMax += 1; yMin = cfg.yMin ?? yMin - 1; }
+  const pad = (yMax - yMin) * 0.08;
+  if (cfg.yMin == null) yMin -= pad;
+  if (cfg.yMax == null) yMax += pad;
+  const X = t => PPAD.l + (t / xMax) * (PW - PPAD.l - PPAD.r);
+  const Y = v => PH - PPAD.b - ((v - yMin) / (yMax - yMin)) * (PH - PPAD.t - PPAD.b);
+
+  const gridVals = [yMin, (yMin + yMax) / 2, yMax];
+  const fmt = v => Math.abs(v) >= 100 ? Math.round(v) : +v.toFixed(1);
+  let svg = "";
+  gridVals.forEach(v => {
+    svg += `<line x1="${PPAD.l}" y1="${Y(v)}" x2="${PW - PPAD.r}" y2="${Y(v)}" stroke="var(--line)" stroke-dasharray="2 5" opacity=".6"/>
+      <text x="${PPAD.l - 6}" y="${Y(v) + 3}" text-anchor="end" font-size="9" fill="var(--faint)" font-family="var(--mono)">${fmt(v)}</text>`;
+  });
+  (cfg.refLines || []).forEach(r => {
+    svg += `<line x1="${PPAD.l}" y1="${Y(r.value)}" x2="${PW - PPAD.r}" y2="${Y(r.value)}" stroke="${r.color || C.gray}" stroke-dasharray="6 4" opacity=".8"/>
+      <text x="${PW - PPAD.r}" y="${Y(r.value) - 4}" text-anchor="end" font-size="9" fill="${r.color || C.gray}" font-family="var(--mono)">${r.label}</text>`;
+  });
+  (events || []).forEach(e => {
+    svg += `<line x1="${X(e.elapsed_s)}" y1="${PPAD.t}" x2="${X(e.elapsed_s)}" y2="${PH - PPAD.b}" stroke="var(--warn)" opacity=".35"/>`;
+  });
+  cfg.series.forEach(s => {
+    const pts = data.filter(d => s.pick(d) != null);
+    if (!pts.length) return;
+    const d = pts.map((p, i) =>
+      (i ? "L" : "M") + X(p.elapsed_s).toFixed(1) + " " + Y(s.pick(p)).toFixed(1)
+    ).join(" ");
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linejoin="round"${s.dash ? ' stroke-dasharray="4 3"' : ""}/>`;
+  });
+  if (cfg.staleDots) {
+    data.filter(d => (d.stale_frames || 0) >= 5).forEach(d => {
+      if (d.fps != null)
+        svg += `<circle cx="${X(d.elapsed_s)}" cy="${Y(d.fps)}" r="3" fill="${C.red}" stroke="var(--surface)" stroke-width="1.5"/>`;
+    });
+  }
+  svg += `<line class="xh" y1="${PPAD.t}" y2="${PH - PPAD.b}" stroke="var(--faint)" opacity="0"/>`;
+
   const card = document.createElement("div");
-  card.className = "card chart-card";
+  card.className = "card pchart";
+  const legend = cfg.series.length > 1
+    ? cfg.series.map(s => `<span class="lg"><i class="${s.dash ? "dash" : ""}" style="background:${s.dash ? "" : s.color};color:${s.color}"></i>${s.label}</span>`).join("")
+    : "";
   card.innerHTML = `
-    <h3><span style="color:${s.color}">●</span> ${s.title}
-        <span class="now">—</span><span class="u">${s.unit}</span></h3>
+    <h3>${cfg.title} <span class="u" style="color:var(--faint);font-size:10px">${cfg.unit || ""}</span>${legend}</h3>
     <div class="chart-wrap">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="120" role="img" aria-label="${s.title} over time">
-        <line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="var(--line)" stroke-dasharray="3 5"/>
-        <line x1="0" y1="${PAD}" x2="${W}" y2="${PAD}" stroke="var(--line)" stroke-dasharray="3 5" opacity=".5"/>
-        <path fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>
-        <line class="xh" y1="0" y2="${H}" stroke="var(--faint)" opacity="0" />
-        <circle class="pt" r="3.5" fill="${s.color}" stroke="var(--surface)" stroke-width="2" opacity="0"/>
-      </svg>
+      <svg viewBox="0 0 ${PW} ${PH}" width="100%" role="img" aria-label="${cfg.title}">${svg}</svg>
       <div class="tooltip"></div>
     </div>`;
-  $("#charts").appendChild(card);
-  const svg = card.querySelector("svg"), path = card.querySelector("path");
-  const tip = card.querySelector(".tooltip"), xh = card.querySelector(".xh"), pt = card.querySelector(".pt");
-  const data = [];
-  function coords(i, v) {
-    const min = s.min ?? 0, max = s.max;
-    const x = data.length < 2 ? W : (i / (data.length - 1)) * W;
-    const y = H - PAD - Math.max(0, Math.min(1, (v - min) / (max - min))) * (H - 2 * PAD);
-    return [x, y];
-  }
-  function draw() {
-    if (!data.length) return;
-    path.setAttribute("d", data.map((d, i) => {
-      const [x, y] = coords(i, d.v); return (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
-    }).join(" "));
-    card.querySelector(".now").textContent = data[data.length - 1].v;
-  }
-  svg.addEventListener("pointermove", (ev) => {
-    if (data.length < 2) return;
-    const rect = svg.getBoundingClientRect();
-    const i = Math.round((ev.clientX - rect.left) / rect.width * (data.length - 1));
-    const d = data[Math.max(0, Math.min(data.length - 1, i))];
-    const [x, y] = coords(i, d.v);
-    xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("opacity", ".6");
-    pt.setAttribute("cx", x); pt.setAttribute("cy", y); pt.setAttribute("opacity", "1");
+  const svgEl = card.querySelector("svg"), tip = card.querySelector(".tooltip"),
+        xh = card.querySelector(".xh");
+  svgEl.addEventListener("pointermove", ev => {
+    const rect = svgEl.getBoundingClientRect();
+    const t = ((ev.clientX - rect.left) / rect.width * PW - PPAD.l) / (PW - PPAD.l - PPAD.r) * xMax;
+    let best = null;
+    for (const d of data) if (!best || Math.abs(d.elapsed_s - t) < Math.abs(best.elapsed_s - t)) best = d;
+    if (!best) return;
+    const x = X(best.elapsed_s);
+    xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("opacity", ".7");
     tip.style.display = "block";
-    tip.style.left = Math.min(x / W * rect.width + 10, rect.width - 90) + "px";
-    tip.style.top = (y / H * 120 - 30) + "px";
-    tip.textContent = `${d.v} ${s.unit} · ${d.t}`;
+    tip.style.left = Math.min(x / PW * rect.width + 12, rect.width - 150) + "px";
+    tip.style.top = "6px";
+    tip.innerHTML = `<b>${best.elapsed_s}s</b> ` + cfg.series
+      .map(s => { const v = s.pick(best); return v == null ? null : `${s.label || cfg.title} ${fmt(v)}`; })
+      .filter(Boolean).join(" · ");
   });
-  svg.addEventListener("pointerleave", () => {
-    tip.style.display = "none"; xh.setAttribute("opacity", "0"); pt.setAttribute("opacity", "0");
+  svgEl.addEventListener("pointerleave", () => {
+    tip.style.display = "none"; xh.setAttribute("opacity", "0");
   });
-  return { push(v, t) { if (v == null) return; data.push({ v, t }); if (data.length > MAXPTS) data.shift(); draw(); } };
+  return card;
+}
+
+const kb2mb = v => v == null ? null : Math.round(v / 1024);
+
+function renderSession(bundle) {
+  // bundle: {session|vrapi..., summary, diagnosis?, recording?}
+  const s = bundle.session || bundle;
+  const vrapi = s.vrapi || [], memory = s.memory || [], thermal = s.thermal || [];
+  const events = s.events || [], summary = bundle.summary || {};
+  const target = summary.fps?.target;
+
+  $("#perf-empty").hidden = vrapi.length > 0 || thermal.length > 0;
+  renderDiagnosis(bundle.diagnosis, bundle.recording, summary);
+
+  const holder = $("#perf-charts");
+  holder.innerHTML = "";
+  if (summary.fps) {
+    const strip = document.createElement("div");
+    strip.className = "stat-strip";
+    const stat = (v, l) => v == null ? "" : `<div class="stat"><b>${v}</b><span>${l}</span></div>`;
+    strip.innerHTML =
+      stat(summary.fps.avg, "avg fps") +
+      stat(target ? target + "Hz" : null, "target") +
+      stat(summary.stale_frames?.percent_of_frames + "%", "stale frames") +
+      stat(summary.gpu?.avg_util != null ? Math.round(summary.gpu.avg_util * 100) + "%" : null, "gpu util") +
+      stat(summary.gpu?.p95_app_gpu_ms != null ? summary.gpu.p95_app_gpu_ms + "ms" : null, "app gpu p95") +
+      stat(summary.memory?.graphics_kb != null ? kb2mb(summary.memory.graphics_kb) + "MB" : null, "graphics mem") +
+      stat(summary.thermal?.max_skin_temp_c != null ? summary.thermal.max_skin_temp_c.toFixed(1) + "°" : null, "max skin");
+    holder.appendChild(strip);
+  }
+
+  const budget = target ? +(1000 / target).toFixed(1) : null;
+  const charts = [
+    vrapi.length && tsChart({
+      title: "FRAME RATE", unit: "fps", yMin: 0, staleDots: true,
+      series: [{ label: "fps", color: C.blue, pick: d => d.fps }],
+      refLines: target ? [{ value: target, label: target + "Hz target" }] : [],
+    }, vrapi, events),
+    vrapi.length && tsChart({
+      title: "APP GPU TIME", unit: "ms", yMin: 0,
+      series: [{ label: "app gpu ms", color: C.aqua, pick: d => d.app_gpu_ms }],
+      refLines: budget ? [{ value: budget, label: budget + "ms budget", color: C.red }] : [],
+    }, vrapi, events),
+    vrapi.length && tsChart({
+      title: "UTILIZATION", unit: "0–1",
+      yMin: 0, yMax: 1,
+      series: [
+        { label: "gpu", color: C.yellow, pick: d => d.gpu_util },
+        { label: "cpu avg", color: C.blue, pick: d => d.cpu_util },
+        { label: "cpu worst core", color: C.blue, dash: true, pick: d => d.cpu_util_worst_core },
+      ],
+    }, vrapi, events),
+    vrapi.length && tsChart({
+      title: "DYNAMIC CLOCK LEVELS", unit: "0–5", yMin: 0, yMax: 5,
+      series: [
+        { label: "gpu level", color: C.yellow, pick: d => d.gpu_level },
+        { label: "cpu level", color: C.blue, pick: d => d.cpu_level },
+      ],
+    }, vrapi, events),
+    (memory.length || vrapi.length) && tsChart({
+      title: "MEMORY", unit: "MB", yMin: 0,
+      series: [
+        { label: "graphics", color: C.yellow, pick: d => kb2mb(d.graphics_kb) },
+        { label: "native heap", color: C.aqua, pick: d => kb2mb(d.native_heap_kb) },
+        { label: "device free", color: C.gray, pick: d => d.free_memory_mb },
+      ],
+    }, mergeByElapsed(memory, vrapi), events),
+    thermal.length && tsChart({
+      title: "SKIN TEMPERATURE", unit: "°C",
+      series: [{ label: "max skin", color: C.red, pick: d => d.max_skin_temp_c }],
+      refLines: [{ value: 40, label: "throttle risk", color: C.yellow }],
+    }, thermal, events),
+  ].filter(Boolean);
+  charts.forEach(c => holder.appendChild(c));
+
+  $("#events-h").hidden = $("#event-list").hidden = !events.length;
+  $("#event-list").innerHTML = events.map(e => `
+    <div class="event-row"><span class="t">${e.elapsed_s}s</span>
+    <span class="k">${e.kind}</span><span></span></div>`).join("");
+  $("#event-list").querySelectorAll(".event-row span:last-child")
+    .forEach((el, i) => el.textContent = events[i].detail);
+}
+
+function mergeByElapsed(memory, vrapi) {
+  // memory samples carry meminfo keys; vrapi carries free_memory_mb —
+  // merge into one x-ordered array (each sample has only its own keys)
+  return [...memory, ...vrapi.map(d => ({ elapsed_s: d.elapsed_s, free_memory_mb: d.free_memory_mb }))]
+    .sort((a, b) => a.elapsed_s - b.elapsed_s);
+}
+
+function renderDiagnosis(diag, recording, summary) {
+  const el = $("#diag-card");
+  if (!diag) {
+    el.innerHTML = recording
+      ? `<div class="card diag healthy"><span class="verdict">recording</span>
+         <span class="headline">Capturing… ${summary?.sample_count ?? 0} seconds of VR metrics so far.</span></div>`
+      : "";
+    return;
+  }
+  const sev = diag.findings[0]?.severity === "critical" ? "critical"
+    : diag.findings.length ? "warning" : "healthy";
+  el.innerHTML = `<div class="card diag ${sev}">
+    <span class="verdict">${diag.verdict.replace(/_/g, " ")}</span>
+    <span class="headline"></span>
+    ${diag.note ? `<div style="color:var(--faint);font-size:12px;margin-top:6px"></div>` : ""}
+    ${diag.findings.map((f, i) => `
+      <details ${i === 0 ? "open" : ""}>
+        <summary>${f.kind.replace(/_/g, " ")} — ${f.severity}</summary>
+        <div class="rec-label" style="margin-top:6px">evidence</div>
+        <ul>${f.evidence.map(() => "<li></li>").join("")}</ul>
+        <div class="rec-label">recommendations</div>
+        <ul class="recs">${f.recommendations.map(() => "<li></li>").join("")}</ul>
+      </details>`).join("")}
+  </div>`;
+  el.querySelector(".headline").textContent = diag.headline;
+  if (diag.note) el.querySelector("div[style*='faint']").textContent = diag.note;
+  el.querySelectorAll("details").forEach((d, i) => {
+    const f = diag.findings[i];
+    d.querySelectorAll("ul:not(.recs) li").forEach((li, j) => li.textContent = f.evidence[j]);
+    d.querySelectorAll("ul.recs li").forEach((li, j) => li.textContent = f.recommendations[j]);
+  });
+}
+
+/* ---- recording control ---- */
+let recTimer = null, loadedSession = null;
+
+async function refreshSessionList() {
+  try {
+    const r = await api("/api/perf/sessions");
+    const opts = r.sessions.map(s =>
+      `<option value="${s.name}">${s.package || "?"} · ${s.started_at} (${s.duration_s}s)</option>`).join("");
+    $("#session-picker").innerHTML = `<option value="">load session…</option>` + opts;
+    $("#diff-picker").innerHTML = `<option value="">compare with…</option>` + opts;
+  } catch (e) { /* quiet */ }
+}
+
+async function populatePerfApps() {
+  try {
+    const r = await api("/api/apps?filter=sideloaded");
+    $("#perf-app").innerHTML = `<option value="">— foreground app —</option>` +
+      r.packages.map(p => `<option value="${p}">${p}</option>`).join("");
+  } catch (e) { /* quiet */ }
+}
+
+$("#btn-rec-session").addEventListener("click", async () => {
+  const btn = $("#btn-rec-session");
+  if (recTimer) {  // stop
+    clearInterval(recTimer); recTimer = null;
+    btn.textContent = "● RECORD"; btn.classList.remove("recording");
+    try {
+      const r = await api("/api/perf/session/stop", { method: "POST" });
+      loadedSession = r;
+      renderSession(r);
+      $("#rec-status").textContent = "saved " + r.name;
+      $("#btn-export").hidden = false;
+      refreshSessionList();
+    } catch (e) { fail(e); }
+    return;
+  }
+  const pkg = $("#perf-app").value;
+  try {
+    const q = pkg ? "?package=" + encodeURIComponent(pkg) : "";
+    const r = await api("/api/perf/session/start" + q, { method: "POST" });
+    btn.textContent = "■ STOP"; btn.classList.add("recording");
+    $("#rec-status").textContent = "profiling " + (r.package || "…");
+    const started = Date.now();
+    recTimer = setInterval(async () => {
+      $("#rec-status").textContent =
+        `profiling ${r.package || ""} · ${Math.round((Date.now() - started) / 1000)}s`;
+      try { renderSession(await api("/api/perf/session/live")); } catch (e) { /* quiet */ }
+    }, 2000);
+  } catch (e) { fail(e); }
 });
 
-let perfTimer = null;
-async function samplePerf() {
+$("#session-picker").addEventListener("change", async ev => {
+  const name = ev.target.value;
+  $("#diff-view").innerHTML = "";
+  if (!name) return;
   try {
-    const snap = await api("/api/perf");
-    const t = new Date().toLocaleTimeString();
-    SERIES.forEach((s, i) => charts[i].push(s.pick(snap), t));
-    const rows = (snap.top_processes || []).map(p =>
-      `<tr><td>${p.pid}</td><td class="num">${p.cpu_percent.toFixed(1)}</td>
-       <td class="num">${p.mem_percent.toFixed(1)}</td><td>${p.name}</td></tr>`).join("");
-    $("#proc-table tbody").innerHTML = rows || `<tr><td colspan="4" class="empty">no process data</td></tr>`;
-    const th = await api("/api/thermal");
-    const hot = th.sensors.filter(x => ["SKIN","BATTERY","CPU","GPU"].includes(x.type))
-      .sort((a, b) => b.temperature_c - a.temperature_c).slice(0, 12);
-    $("#thermal-list").innerHTML = hot.map(x => `
-      <div class="thermal-row ${x.warning ? "hot" : ""}">
-        <span class="name">${x.name}</span>
-        <span class="bar"><i style="width:${Math.min(100, x.temperature_c / 60 * 100)}%"></i></span>
-        <span class="t">${x.temperature_c.toFixed(1)}°C</span>
-        <span style="color:var(--faint);font-size:10px">${x.type}</span>
-      </div>`).join("");
-  } catch (e) { /* keep sampling */ }
-}
-$("#btn-perf-toggle").addEventListener("click", () => {
-  const btn = $("#btn-perf-toggle");
-  if (perfTimer) { clearInterval(perfTimer); perfTimer = null; btn.textContent = "START MONITORING"; }
-  else { samplePerf(); perfTimer = setInterval(samplePerf, 2500); btn.textContent = "STOP"; }
+    const r = await api("/api/perf/session?name=" + encodeURIComponent(name));
+    loadedSession = r;
+    renderSession(r);
+    $("#btn-export").hidden = false;
+    $("#diff-picker").hidden = false;
+    $("#rec-status").textContent = name;
+  } catch (e) { fail(e); }
+});
+
+$("#diff-picker").addEventListener("change", async ev => {
+  const other = ev.target.value, current = $("#session-picker").value;
+  if (!other || !current) return;
+  try {
+    const d = await api(`/api/perf/diff?before=${encodeURIComponent(other)}&after=${encodeURIComponent(current)}`);
+    const row = (label, m, lowerIsBetter) => {
+      if (!m || m.delta == null) return "";
+      const better = lowerIsBetter ? m.delta < 0 : m.delta > 0;
+      const cls = m.delta === 0 ? "" : better ? "better" : "worse";
+      return `<tr><td>${label}</td><td class="num">${m.before}</td><td class="num">${m.after}</td>
+        <td class="num ${cls}">${m.delta > 0 ? "+" : ""}${m.delta}</td></tr>`;
+    };
+    $("#diff-view").innerHTML = `<div class="card" style="margin-bottom:14px">
+      <h3 style="font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--muted)">COMPARISON — ${other} → ${current}</h3>
+      <p style="font-size:13px;margin:8px 0"></p>
+      <table class="difftable">
+        <thead><tr><th>Metric</th><th class="num">Before</th><th class="num">After</th><th class="num">Δ</th></tr></thead>
+        <tbody>
+          ${row("avg fps", d.fps_avg, false)}
+          ${row("p5 fps", d.fps_p5, false)}
+          ${row("stale frames %", d.stale_percent, true)}
+          ${row("gpu util avg", d.gpu_util_avg, true)}
+          ${row("app gpu p95 ms", d.app_gpu_p95_ms, true)}
+          ${row("cpu worst core p95", d.cpu_worst_core_p95, true)}
+          ${row("graphics growth KB", d.graphics_growth_kb, true)}
+        </tbody>
+      </table></div>`;
+    $("#diff-view p").textContent = d.headline + ` (verdict: ${d.verdict.before} → ${d.verdict.after})`;
+  } catch (e) { fail(e); }
+});
+
+$("#btn-export").addEventListener("click", () => {
+  if (!loadedSession) return;
+  const blob = new Blob([JSON.stringify(loadedSession.session || loadedSession, null, 1)],
+    { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (loadedSession.name || "session") + ".json";
+  a.click();
+  URL.revokeObjectURL(a.href);
 });
 
 /* ---------------- viewport ---------------- */
@@ -761,6 +1029,7 @@ function lazyLoad() {
   if (loaded.has(id)) return; loaded.add(id);
   if (id === "apps") loadApps();
   if (id === "files") loadFiles("/sdcard/");
+  if (id === "performance") { populatePerfApps(); refreshSessionList(); }
 }
 window.addEventListener("hashchange", lazyLoad);
 lazyLoad();
