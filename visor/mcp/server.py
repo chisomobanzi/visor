@@ -1,8 +1,13 @@
-"""Visor MCP server — lets Claude Code interact with a connected Quest headset.
+"""Visor MCP server — lets an AI assistant interact with a connected Quest headset.
 
-Run with `visor-mcp` (stdio transport). Register in Claude Code with:
+A standard Model Context Protocol server (stdio transport) that works with any
+MCP-compatible client; primarily developed and tested against Claude Code.
+
+Run with `visor-mcp`. Register in Claude Code with:
 
     claude mcp add quest -- visor-mcp
+
+or point any other MCP client at the `visor-mcp` command (stdio, no args).
 """
 
 from __future__ import annotations

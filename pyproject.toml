@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "visor-dev"
 version = "0.1.0"
-description = "Open source Quest developer toolkit for Linux — ADB wrapper, MCP server, and CLI replacing Meta Quest Developer Hub"
+description = "Open source, cross-platform Quest developer toolkit — ADB wrapper, MCP server, and CLI, an alternative to Meta Quest Developer Hub"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

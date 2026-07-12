@@ -1,13 +1,13 @@
 # Visor
 
-**Cross-platform Quest developer toolkit** — an open source alternative to Meta Quest Developer Hub (MQDH) that runs on Linux, macOS, and Windows (MQDH is Windows/Mac only, so Linux users had nothing), plus something MQDH doesn't have on any platform: an MCP server that lets Claude Code see and control your headset.
+**Cross-platform Quest developer toolkit** — an open source alternative to Meta Quest Developer Hub (MQDH) that runs on Linux, macOS, and Windows (MQDH is Windows/Mac only, so Linux users had nothing), plus something MQDH doesn't have on any platform: an MCP server that lets AI coding agents — Claude Code and any other MCP-compatible client — see and control your headset.
 
 Four layers, one library:
 
 | Layer | Command | What it does |
 |-------|---------|--------------|
 | Python library | `import visor.adb` | Quest-aware ADB wrapper: devices, apps, capture, logs, performance |
-| MCP server | `visor-mcp` | 24 `quest_*` tools for Claude Code — screenshots Claude can *see*, crash logs, perf monitoring |
+| MCP server | `visor-mcp` | 29 `quest_*` tools for any MCP client — screenshots the model can *see*, crash logs, perf monitoring |
 | CLI | `visor` | MQDH-like functionality from the terminal |
 | Web dashboard | `visor ui` | Live instrument panel: perf charts, viewport, logs, app/file management |
 
@@ -63,20 +63,40 @@ visor push ./file /sdcard/  ·  visor pull /sdcard/f ./  ·  visor ls /sdcard/
 
 Multiple devices? Add `--device <serial>`.
 
-## Claude Code integration (MCP)
+## AI assistant integration (MCP)
+
+`visor-mcp` is a standard [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, so it works with any MCP-compatible client — Claude Code, OpenAI's Codex CLI, Cline, Continue, Cursor, and agent frameworks built on the MCP SDKs (including ones driving open-source models). It's primarily developed and tested against Claude Code, but nothing in it is Claude-specific: it exposes plain MCP tools and standard content blocks.
+
+The server is a single command, `visor-mcp`, that speaks MCP over stdio and takes no arguments — register it however your client expects.
+
+Claude Code:
 
 ```bash
 claude mcp add quest -- visor-mcp
 ```
 
-Then ask Claude Code things like:
+Most other clients (Cursor, Cline, Continue, Claude Desktop, …) use a JSON config:
 
-- *"Take a screenshot of my headset — what's on screen?"* (Claude sees the actual image)
+```json
+{
+  "mcpServers": {
+    "quest": {
+      "command": "visor-mcp"
+    }
+  }
+}
+```
+
+Codex and some others use their own config file, but the essentials are the same everywhere: run `visor-mcp`, no args, stdio transport.
+
+Then ask your assistant things like:
+
+- *"Take a screenshot of my headset — what's on screen?"* — clients that support image tool results (like Claude Code) display the actual image; text-only clients still get every other tool
 - *"Install this build, launch it, and watch the logs for exceptions while I test"*
 - *"Why did my app crash? Pull the crash log and explain the stack trace"*
 - *"Monitor performance for 60 seconds while I play, then tell me if I'm thermal throttling"*
 
-Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`.
+Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_app_memory`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_perf_session`, `quest_perf_diff`, `quest_launch_benchmark`, `quest_trace`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`.
 
 ## Web dashboard
 
