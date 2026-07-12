@@ -414,14 +414,149 @@ def _print_snapshot(snap: dict):
         console.print(ptable)
 
 
-@app.command()
+perf_app = typer.Typer(
+    help="Performance: snapshot, session profiling, reports, diffs.",
+    invoke_without_command=True,
+)
+app.add_typer(perf_app, name="perf")
+
+
+def _print_diagnosis(diag: dict):
+    style = {"healthy": "green"}.get(diag["verdict"], "yellow")
+    if any(f["severity"] == "critical" for f in diag["findings"]):
+        style = "bold red"
+    console.print(
+        f"\n[{style}]● {diag['verdict'].replace('_', ' ').upper()}[/{style}] "
+        f"{diag['headline']}"
+    )
+    if note := diag.get("note"):
+        console.print(f"[dim]{note}[/dim]")
+    for f in diag["findings"]:
+        console.print(f"\n[bold]{f['kind'].replace('_', ' ')}[/bold] "
+                      f"[dim]({f['severity']})[/dim]")
+        for e in f["evidence"]:
+            console.print(f"  [dim]evidence:[/dim] {e}")
+        for r in f["recommendations"]:
+            console.print(f"  [cyan]→[/cyan] {r}")
+
+
+def _print_session_summary(summary: dict):
+    table = Table(title="Session summary", show_header=False)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    if fps := summary.get("fps"):
+        table.add_row(
+            "FPS", f"{fps['avg']} avg / {fps['p5']} p5 "
+                   f"(target {fps.get('target') or '?'}Hz)"
+        )
+    if stale := summary.get("stale_frames"):
+        table.add_row(
+            "Stale frames",
+            f"{stale['total']} ({stale['percent_of_frames']}% of frames, "
+            f"worst second {stale['worst_second']})",
+        )
+    if gpu := summary.get("gpu"):
+        table.add_row(
+            "GPU", f"util {gpu['avg_util']} avg / {gpu['p95_util']} p95, "
+                   f"level ≤{gpu['max_level']}, app {gpu['avg_app_gpu_ms']}ms avg",
+        )
+    if cpu := summary.get("cpu"):
+        table.add_row(
+            "CPU", f"util {cpu['avg_util']} avg, worst core "
+                   f"{cpu['p95_worst_core']} p95, level ≤{cpu['max_level']}",
+        )
+    if mem := summary.get("memory"):
+        table.add_row(
+            "Memory",
+            f"graphics {(mem['graphics_kb'] or 0) // 1024}MB "
+            f"({mem['graphics_growth_kb'] or 0:+} KB over session)",
+        )
+    if thermal := summary.get("thermal"):
+        table.add_row(
+            "Thermal",
+            f"{thermal['start_status']} → {thermal['end_status']}, "
+            f"max skin {thermal['max_skin_temp_c']}°C",
+        )
+    if note := summary.get("note"):
+        table.add_row("Note", note)
+    console.print(table)
+
+
+@perf_app.command("record")
+def perf_record(
+    duration: int = typer.Option(30, "--duration", "-t", help="Seconds to record"),
+    package: Optional[str] = typer.Option(
+        None, "--app", "-a", help="Package to profile (default: foreground app)"
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--out", "-o", help="Session JSON path (default ./sessions/)"
+    ),
+):
+    """Record a profiling session while you exercise the app, then print
+    the summary and bottleneck diagnosis."""
+    import time as _time
+
+    serial = resolve_device()
+    with console.status(f"Profiling for {duration}s — play the app now..."):
+        session = run(adb.record_session, serial, duration_s=duration,
+                      package=package)
+    output = output or f"sessions/{(session.package or 'unknown').replace('.', '_')}-{_time.strftime('%Y%m%d-%H%M%S')}.json"
+    import os as _os
+    _os.makedirs(_os.path.dirname(_os.path.abspath(output)), exist_ok=True)
+    run(adb.save_session, session, output)
+    _print_session_summary(run(adb.summarize_session, session))
+    _print_diagnosis(run(adb.diagnose_session, session))
+    console.print(f"\n[green]ok[/green] session saved to {output}")
+
+
+@perf_app.command("report")
+def perf_report(session_file: str):
+    """Summarize and diagnose a saved session JSON."""
+    session = run(adb.load_session, session_file)
+    console.print(f"[dim]{session.package} · {session.started_at} · "
+                  f"{session.duration_s}s · {len(session.vrapi)} samples[/dim]")
+    _print_session_summary(run(adb.summarize_session, session))
+    _print_diagnosis(run(adb.diagnose_session, session))
+
+
+@perf_app.command("diff")
+def perf_diff(before: str, after: str):
+    """Compare two saved sessions (before/after an optimization)."""
+    d = run(
+        adb.diff_sessions, run(adb.load_session, before), run(adb.load_session, after)
+    )
+    console.print(d["headline"])
+    table = Table()
+    table.add_column("Metric")
+    table.add_column("Before", justify="right")
+    table.add_column("After", justify="right")
+    table.add_column("Δ", justify="right")
+    for key in ("fps_avg", "fps_p5", "stale_percent", "gpu_util_avg",
+                "app_gpu_p95_ms", "cpu_worst_core_p95", "graphics_growth_kb"):
+        m = d.get(key)
+        if not m or m.get("delta") is None:
+            continue
+        delta = m["delta"]
+        lower_better = key not in ("fps_avg", "fps_p5")
+        good = delta < 0 if lower_better else delta > 0
+        style = "green" if good else "red" if delta else ""
+        table.add_row(key, str(m["before"]), str(m["after"]),
+                      f"[{style}]{delta:+}[/{style}]" if style else f"{delta:+}")
+    console.print(table)
+    console.print(f"verdict: {d['verdict']['before']} → {d['verdict']['after']}")
+
+
+@perf_app.callback()
 def perf(
+    ctx: typer.Context,
     monitor: Optional[int] = typer.Option(
         None, "--monitor", "-m", help="Monitor for N seconds instead of one snapshot"
     ),
     interval: int = typer.Option(2, "--interval", "-i", help="Sample interval (s)"),
 ):
     """Performance snapshot (or continuous monitoring with --monitor)."""
+    if ctx.invoked_subcommand is not None:
+        return
     serial = resolve_device()
     if monitor:
         console.print(f"[dim]sampling every {interval}s for {monitor}s...[/dim]")
@@ -450,6 +585,43 @@ def perf(
     with console.status("Sampling..."):
         snap = run(adb.get_performance_snapshot, serial)
     _print_snapshot(snap)
+
+
+@app.command()
+def bench(
+    package: str = typer.Argument(..., help="Package to benchmark"),
+    runs: int = typer.Option(3, "--runs", "-n", help="Number of cold starts"),
+):
+    """Benchmark app cold-start time (force-stop + timed launch, N runs)."""
+    serial = resolve_device()
+    with console.status(f"Benchmarking {package} cold start x{runs}..."):
+        result = run(adb.launch_benchmark, serial, package, runs=runs)
+    if not result["runs_completed"]:
+        die(f"all {runs} launches failed: "
+            f"{result['runs'][0].get('error', 'unknown error')}")
+    stats = result["total_time_ms"]
+    table = Table(title=f"Cold start · {package}", show_header=False)
+    table.add_column("Stat", style="bold")
+    table.add_column("Value")
+    table.add_row("Runs", f"{result['runs_completed']} ok, {result['runs_failed']} failed")
+    table.add_row("Median", f"{stats['median']} ms")
+    table.add_row("Min / Max", f"{stats['min']} / {stats['max']} ms")
+    table.add_row("Launch state", result["launch_state"] or "?")
+    console.print(table)
+
+
+@app.command()
+def trace(
+    duration: int = typer.Option(10, "--duration", "-t", help="Seconds (max 60)"),
+    output: Optional[str] = typer.Option(None, "--out", "-o", help="Output .pftrace"),
+):
+    """Capture a perfetto system trace (scheduling, clocks, graphics) —
+    open the file at ui.perfetto.dev."""
+    serial = resolve_device()
+    with console.status(f"Tracing for {duration}s — reproduce the problem now..."):
+        result = run(adb.capture_trace, serial, duration_s=duration,
+                     save_path=output)
+    console.print(f"[green]ok[/green] {result.message}")
 
 
 @app.command()

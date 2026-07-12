@@ -1,7 +1,6 @@
 """Tests for the dashboard perf-workspace endpoints."""
 
 import json
-from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient

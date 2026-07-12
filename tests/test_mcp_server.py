@@ -131,6 +131,7 @@ class TestToolRegistration:
             "quest_thermal", "quest_frame_timing", "quest_connect_wireless",
             "quest_set_refresh_rate", "quest_tracking", "quest_app_info",
             "quest_perf_session", "quest_perf_diff", "quest_app_memory",
+            "quest_launch_benchmark", "quest_trace",
         }
         missing = expected - names
         assert not missing, f"tools missing from server: {missing}"

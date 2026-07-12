@@ -22,6 +22,7 @@ from visor.adb.device import (
     get_device_info,
     pair_device,
 )
+from visor.adb.bench import capture_trace, launch_benchmark
 from visor.adb.diagnosis import diagnose_session, diff_sessions
 from visor.adb.files import delete_file, list_files, pull_file, push_file
 from visor.adb.perf_session import (

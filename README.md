@@ -48,6 +48,13 @@ visor perf                        # CPU/memory/thermal/battery snapshot
 visor perf --monitor 30           # timeseries
 visor thermal                     # per-sensor temps with throttle warnings
 
+# Profiling (see "Performance profiling" below)
+visor perf record -t 60           # record a session while you play
+visor perf report session.json    # summary + bottleneck diagnosis
+visor perf diff before.json after.json
+visor bench com.my.game           # cold-start benchmark
+visor trace -t 10                 # perfetto trace -> ui.perfetto.dev
+
 visor push ./file /sdcard/  ·  visor pull /sdcard/f ./  ·  visor ls /sdcard/
 ```
 
@@ -89,6 +96,38 @@ for entry in adb.logcat_stream(quest.serial, level="E"):
 ```
 
 All functions raise typed errors (`DeviceUnauthorizedError`, `DeviceNotFoundError`, …) with actionable messages instead of raw ADB stderr.
+
+## Performance profiling
+
+Visor is a full VR profiler built on the per-second `VrApi` metrics the
+Quest runtime logs for any rendering VR app: FPS vs target, stale frames,
+CPU/GPU dynamic levels + clocks + utilization (including worst core), app
+GPU time vs frame budget, and free memory — plus periodic memory anatomy
+(`dumpsys meminfo`, where graphics allocations dominate) and thermal
+snapshots.
+
+**Sessions** are the core primitive: record one while you play
+(`visor perf record`, the dashboard's ● RECORD, or the `quest_perf_session`
+MCP tool), get a summary and an evidence-based **bottleneck diagnosis** —
+GPU-bound, CPU-bound (single-thread vs parallel), thermal throttling
+(including silent clock clamping), memory pressure (lmkd kills), hitching
+(bursts with headroom), or memory growth — each with concrete
+recommendations. Sessions are JSON files; diff two of them to verify an
+optimization (`visor perf diff` / `quest_perf_diff`).
+
+The dashboard's Performance tab is a live workspace: FPS chart with target
+line and stale-frame dots, app GPU time vs budget, utilization, clock
+levels, memory series, skin temperature with throttle threshold, and event
+annotations (level changes, thermal transitions, lmkd kills).
+
+For the "what exactly blocked this frame" tier: `visor trace` captures a
+perfetto system trace (scheduling/clocks/graphics; open at ui.perfetto.dev),
+and `visor bench` measures cold-start times.
+
+Notes: VR frame metrics only flow while the app is *rendering* — a
+sleeping display pauses everything (visor auto-wakes it), and 2D panel
+apps fall back to `gfxinfo`. Battery current draw isn't readable on OS
+v14+, so drain is inferred from level over longer sessions.
 
 ## Notes on Quest OS v14+
 

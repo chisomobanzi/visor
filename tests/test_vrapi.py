@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from visor.adb.vrapi import VrApiSample, parse_vrapi_line, parse_vrapi_message
+from visor.adb.vrapi import parse_vrapi_line, parse_vrapi_message
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vrapi_v14.log"
 

@@ -1,6 +1,5 @@
 """Tests for the bottleneck diagnosis engine and session diffing."""
 
-import pytest
 
 from visor.adb.diagnosis import diagnose_session, diff_sessions
 from visor.adb.perf_session import PerfSession

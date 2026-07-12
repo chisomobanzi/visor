@@ -416,6 +416,37 @@ def quest_perf_diff(
 
 
 @mcp.tool()
+def quest_launch_benchmark(
+    package_name: str, runs: int = 3, device_id: Optional[str] = None
+) -> dict:
+    """Benchmark an app's cold-start time: force-stop then timed launch,
+    N times (max 5). Returns per-run timings and min/median/max — useful
+    for measuring startup optimizations."""
+    serial = _resolve_device(device_id)
+    return _wrap(
+        adb.launch_benchmark, serial, package_name, runs=min(runs, 5)
+    )
+
+
+@mcp.tool()
+def quest_trace(
+    duration_seconds: int = 10,
+    save_path: Optional[str] = None,
+    device_id: Optional[str] = None,
+) -> dict:
+    """Capture a perfetto system trace (max 60s): per-thread scheduling,
+    CPU frequencies, graphics events. Use when session metrics show a
+    problem (hitches, CPU-bound) and you need to see exactly what blocked.
+    The .pftrace file can be opened at https://ui.perfetto.dev."""
+    serial = _resolve_device(device_id)
+    result = _wrap(
+        adb.capture_trace, serial, duration_s=duration_seconds,
+        save_path=save_path,
+    )
+    return asdict(result)
+
+
+@mcp.tool()
 def quest_app_memory(package_name: str, device_id: Optional[str] = None) -> dict:
     """Get an app's memory anatomy (PSS in KB): java heap, native heap,
     code, stack, and graphics — graphics allocations (textures, buffers,
