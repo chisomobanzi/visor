@@ -329,13 +329,110 @@ def quest_thermal(device_id: Optional[str] = None) -> dict:
 
 @mcp.tool()
 def quest_frame_timing(
-    package_name: str, device_id: Optional[str] = None
+    package_name: Optional[str] = None, device_id: Optional[str] = None
 ) -> dict:
-    """Get frame timing stats (total/janky frames, frame time percentiles)
-    for an app via gfxinfo. Note: VR apps rendering through OpenXR bypass
-    this pipeline — data may be limited for fully immersive apps."""
+    """Get live VR frame timing for the running app: FPS vs target, stale
+    frames, GPU/CPU utilization and dynamic levels, app GPU time vs frame
+    budget. Captures ~6s of the VrApi metrics stream. Falls back to
+    gfxinfo for 2D/panel apps that don't render in VR."""
     serial = _resolve_device(device_id)
-    return _wrap(adb.get_frame_timing, serial, package_name)
+    session = _wrap(
+        adb.record_session, serial, duration_s=6, package=package_name,
+        poll_interval_s=30,
+    )
+    if session.vrapi:
+        summary = adb.summarize_session(session)
+        return {
+            "source": "vrapi",
+            "package": session.package,
+            "summary": summary,
+            "latest_sample": session.vrapi[-1],
+        }
+    result = _wrap(adb.get_frame_timing, serial, package_name)
+    result["note"] = (
+        "No VrApi stream (app not rendering in VR) — gfxinfo data instead. "
+        + result.get("note", "")
+    )
+    return result
+
+
+def _sessions_dir() -> str:
+    path = os.path.join(os.path.expanduser("~"), ".visor", "sessions")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+@mcp.tool()
+def quest_perf_session(
+    duration_seconds: int = 30,
+    package_name: Optional[str] = None,
+    device_id: Optional[str] = None,
+) -> dict:
+    """Record a full performance profiling session (max 300s) and return a
+    summary, a bottleneck diagnosis (GPU-bound / CPU-bound / thermal
+    throttling / memory pressure / hitching, with evidence and
+    recommendations), and notable events. Use while the user exercises
+    their app in the headset. The full session (per-second VrApi metrics,
+    memory anatomy, thermal timeline) is saved to a JSON file whose path
+    is returned — pass two such paths to quest_perf_diff to compare runs.
+    Defaults to the current foreground app."""
+    import time as _time
+
+    duration_seconds = min(duration_seconds, 300)
+    serial = _resolve_device(device_id)
+    session = _wrap(
+        adb.record_session, serial,
+        duration_s=duration_seconds, package=package_name,
+    )
+    stamp = _time.strftime("%Y%m%d-%H%M%S")
+    path = os.path.join(
+        _sessions_dir(),
+        f"{(session.package or 'unknown').replace('.', '_')}-{stamp}.json",
+    )
+    adb.save_session(session, path)
+    return {
+        "session_path": path,
+        "summary": adb.summarize_session(session),
+        "diagnosis": adb.diagnose_session(session),
+        "events": session.events,
+        "sample_count": len(session.vrapi),
+    }
+
+
+@mcp.tool()
+def quest_perf_diff(
+    before_session_path: str, after_session_path: str
+) -> dict:
+    """Compare two recorded perf sessions (JSON files from
+    quest_perf_session), e.g. before/after an optimization. Returns metric
+    deltas (fps, stale frames, GPU/CPU load, memory growth) and the
+    verdict change."""
+    try:
+        before = adb.load_session(before_session_path)
+        after = adb.load_session(after_session_path)
+    except (OSError, ValueError, TypeError, KeyError) as e:
+        raise QuestError(f"Could not load session file: {e}") from None
+    return adb.diff_sessions(before, after)
+
+
+@mcp.tool()
+def quest_app_memory(package_name: str, device_id: Optional[str] = None) -> dict:
+    """Get an app's memory anatomy (PSS in KB): java heap, native heap,
+    code, stack, and graphics — graphics allocations (textures, buffers,
+    surfaces) are usually what exhausts memory in VR apps."""
+    from visor.utils.parser import parse_meminfo_summary
+
+    serial = _resolve_device(device_id)
+    output = _wrap(
+        adb.get_adb().shell,
+        f"dumpsys meminfo {package_name}", device_id=serial, timeout=15,
+    )
+    summary = parse_meminfo_summary(output)
+    if not summary:
+        raise QuestError(
+            f"{package_name} has no memory info — is it installed and running?"
+        )
+    return {"package": package_name, "pss_kb": summary}
 
 
 @mcp.tool()

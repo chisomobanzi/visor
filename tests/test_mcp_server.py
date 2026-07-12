@@ -91,6 +91,31 @@ class TestToolResponses:
             server.quest_install("/tmp/x.apk")
 
 
+class TestPerfTools:
+    def test_perf_session_returns_summary_diagnosis_and_path(self, patch_adb, tmp_path, monkeypatch):
+        from visor.adb.perf_session import PerfSession
+
+        patch_adb("discover_devices", lambda: [QUEST])
+        fake = PerfSession(
+            device=QUEST.serial, package="com.my.game",
+            started_at="t", duration_s=5,
+            vrapi=[{"timestamp": "t", "pid": 1, "fps": 72, "target_fps": 72,
+                    "elapsed_s": 0.0, "stale_frames": 0}],
+        )
+        patch_adb("record_session", lambda *a, **k: fake)
+        monkeypatch.setattr(server, "_sessions_dir", lambda: str(tmp_path))
+        result = server.quest_perf_session(duration_seconds=5)
+        assert result["summary"]["sample_count"] == 1
+        assert result["diagnosis"]["verdict"] in ("healthy", "no_vr_data")
+        assert result["session_path"].startswith(str(tmp_path))
+        import os
+        assert os.path.exists(result["session_path"])
+
+    def test_perf_diff_bad_path_is_clean_error(self, patch_adb):
+        with pytest.raises(server.QuestError, match="session file"):
+            server.quest_perf_diff("/nope/a.json", "/nope/b.json")
+
+
 class TestToolRegistration:
     def test_all_expected_tools_registered(self):
         import anyio
@@ -105,6 +130,7 @@ class TestToolRegistration:
             "quest_screen_record", "quest_app_list", "quest_clear_data",
             "quest_thermal", "quest_frame_timing", "quest_connect_wireless",
             "quest_set_refresh_rate", "quest_tracking", "quest_app_info",
+            "quest_perf_session", "quest_perf_diff", "quest_app_memory",
         }
         missing = expected - names
         assert not missing, f"tools missing from server: {missing}"

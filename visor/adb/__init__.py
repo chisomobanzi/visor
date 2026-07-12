@@ -22,7 +22,17 @@ from visor.adb.device import (
     get_device_info,
     pair_device,
 )
+from visor.adb.diagnosis import diagnose_session, diff_sessions
 from visor.adb.files import delete_file, list_files, pull_file, push_file
+from visor.adb.perf_session import (
+    LiveRecorder,
+    PerfSession,
+    load_session,
+    record_session,
+    save_session,
+    summarize_session,
+)
+from visor.adb.vrapi import VrApiSample, parse_vrapi_line
 from visor.adb.logs import crash_log, logcat_clear, logcat_dump, logcat_stream
 from visor.adb.performance import (
     get_foreground_app,
