@@ -5,7 +5,12 @@ dist/
 build/
 .venv/
 .pytest_cache/
+.ruff_cache/
 screenshots/
 recordings/
 *.apk
 .coverage
+
+# Local tooling / editor state
+.claude/
+.tokensave/

@@ -22,7 +22,7 @@ Four layers, one library:
 
 ```bash
 pip install visor        # once published; from source:
-git clone <repo> && cd visor && pip install .
+git clone https://github.com/chisomobanzi/visor && cd visor && pip install .
 ```
 
 ## CLI quickstart

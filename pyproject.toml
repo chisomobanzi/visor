@@ -42,7 +42,9 @@ visor = "visor.cli.main:app"
 visor-mcp = "visor.mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/chisomo-banzi/visor"
+Homepage = "https://github.com/chisomobanzi/visor"
+Repository = "https://github.com/chisomobanzi/visor"
+Issues = "https://github.com/chisomobanzi/visor/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["visor"]
