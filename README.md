@@ -1,5 +1,10 @@
 # Visor
 
+[![CI](https://github.com/chisomobanzi/visor/actions/workflows/ci.yml/badge.svg)](https://github.com/chisomobanzi/visor/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/visor-dev)](https://pypi.org/project/visor-dev/)
+[![Python](https://img.shields.io/pypi/pyversions/visor-dev)](https://pypi.org/project/visor-dev/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **Cross-platform Quest developer toolkit** — an open source alternative to Meta Quest Developer Hub (MQDH) that runs on Linux, macOS, and Windows (MQDH is Windows/Mac only, so Linux users had nothing), plus something MQDH doesn't have on any platform: an MCP server that lets AI coding agents — Claude Code and any other MCP-compatible client — see and control your headset.
 
 Four layers, one library:

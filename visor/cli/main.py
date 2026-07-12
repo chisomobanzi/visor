@@ -1,4 +1,4 @@
-"""visor — Quest developer CLI for Linux.
+"""visor — Quest developer CLI.
 
 MQDH-like functionality from the terminal: device management, app
 install/launch, capture, logs, performance.
@@ -17,7 +17,7 @@ from visor.adb.wrapper import VisorError
 
 app = typer.Typer(
     name="visor",
-    help="Quest developer toolkit for Linux — MQDH without the bloat.",
+    help="Quest developer toolkit — MQDH without the bloat.",
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
