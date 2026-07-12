@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "visor"
+name = "visor-dev"
 version = "0.1.0"
 description = "Open source Quest developer toolkit for Linux — ADB wrapper, MCP server, and CLI replacing Meta Quest Developer Hub"
 readme = "README.md"

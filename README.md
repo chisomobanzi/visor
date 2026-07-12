@@ -21,7 +21,7 @@ Four layers, one library:
 ## Install
 
 ```bash
-pip install visor        # once published; from source:
+pip install visor-dev    # provides the `visor` command; from source:
 git clone https://github.com/chisomobanzi/visor && cd visor && pip install .
 ```
 
