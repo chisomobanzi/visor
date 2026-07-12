@@ -11,6 +11,8 @@ import shutil
 import subprocess
 from typing import Optional, Union
 
+from visor.utils.host import install_hint
+
 
 class VisorError(Exception):
     """Base class for all visor errors."""
@@ -82,9 +84,8 @@ class ADBWrapper:
         self.adb_path = adb_path or shutil.which("adb")
         if not self.adb_path:
             raise ADBNotFoundError(
-                "adb binary not found. Install it with your package manager, "
-                "e.g. `sudo apt install android-platform-tools` or "
-                "`sudo pacman -S android-tools`."
+                "adb (Android platform-tools) not found on PATH. "
+                + install_hint("adb")
             )
 
     def run(

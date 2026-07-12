@@ -850,7 +850,7 @@ function startStream() {
   img.addEventListener("error", () => {
     if (!streaming) return;
     stopStream();
-    fail(new Error("live stream failed — check the headset connection and that ffmpeg is installed (sudo apt install ffmpeg)"));
+    fail(new Error("live stream failed — check the headset connection and that ffmpeg is installed and on your PATH"));
   });
   vp.innerHTML = ""; vp.appendChild(img);
   $("#btn-live").textContent = "STOP LIVE";

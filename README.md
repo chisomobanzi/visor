@@ -1,6 +1,6 @@
 # Visor
 
-**Quest developer toolkit for Linux** — an open source replacement for the Windows/Mac-only Meta Quest Developer Hub (MQDH), plus something MQDH doesn't have: an MCP server that lets Claude Code see and control your headset.
+**Cross-platform Quest developer toolkit** — an open source alternative to Meta Quest Developer Hub (MQDH) that runs on Linux, macOS, and Windows (MQDH is Windows/Mac only, so Linux users had nothing), plus something MQDH doesn't have on any platform: an MCP server that lets Claude Code see and control your headset.
 
 Four layers, one library:
 
@@ -13,10 +13,13 @@ Four layers, one library:
 
 ## Requirements
 
-- Linux, Python 3.10+
-- `adb` (`sudo apt install android-sdk-platform-tools` / `sudo pacman -S android-tools`)
+- Python 3.10+ on Linux, macOS, or Windows
+- `adb` on your PATH:
+  - Linux: `sudo apt install android-sdk-platform-tools` (or `sudo pacman -S android-tools`)
+  - macOS: `brew install android-platform-tools`
+  - Windows: `winget install --id Google.PlatformTools` (or [download platform-tools](https://developer.android.com/tools/releases/platform-tools))
 - A Quest with [developer mode enabled](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/), connected via USB (accept the debugging prompt in the headset) or wireless ADB
-- Optional: `ffmpeg` for the dashboard's live video view, `scrcpy` for casting
+- Optional: `ffmpeg` for the dashboard's live video view, `scrcpy` for casting (both available via the same package managers)
 
 ## Install
 

@@ -35,7 +35,7 @@ def adb():
 class TestADBDiscovery:
     def test_missing_adb_binary_raises_clear_error(self):
         with mock.patch("shutil.which", return_value=None):
-            with pytest.raises(ADBNotFoundError, match="android-platform-tools"):
+            with pytest.raises(ADBNotFoundError, match="platform-tools"):
                 ADBWrapper()
 
     def test_explicit_adb_path_is_used(self, tmp_path):

@@ -12,6 +12,7 @@ from typing import Optional
 
 from visor.adb.wrapper import ADBCommandError, ADBWrapper, get_adb
 from visor.utils.constants import MAX_SCREENRECORD_SECONDS
+from visor.utils.host import detached_popen_kwargs, install_hint
 
 
 @dataclass
@@ -175,8 +176,7 @@ def start_screen_stream(
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise ADBCommandError(
-            "ffmpeg is required for live streaming — install it, e.g. "
-            "`sudo apt install ffmpeg`."
+            "ffmpeg is required for live streaming. " + install_hint("ffmpeg")
         )
 
     adb_cmd = [adb.adb_path]
@@ -228,8 +228,7 @@ def start_cast(
     scrcpy = shutil.which("scrcpy")
     if not scrcpy:
         raise ADBCommandError(
-            "scrcpy is not installed. Install it for casting, e.g. "
-            "`sudo apt install scrcpy`."
+            "scrcpy is not installed (required for casting). " + install_hint("scrcpy")
         )
     cmd = [scrcpy]
     if device_id:
@@ -241,7 +240,7 @@ def start_cast(
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        **detached_popen_kwargs(),
     )
     time.sleep(0.5)
     if proc.poll() is not None:
@@ -250,6 +249,6 @@ def start_cast(
         )
     return CastSession(
         pid=proc.pid,
-        message=f"scrcpy casting started (pid {proc.pid}). Close the window or "
-        f"`kill {proc.pid}` to stop.",
+        message=f"scrcpy casting started (pid {proc.pid}). "
+        "Close the scrcpy window to stop.",
     )
