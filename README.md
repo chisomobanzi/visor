@@ -164,7 +164,7 @@ v14+, so drain is inferred from level over longer sessions.
 
 - `/sys/class/thermal` and battery `current_now` are permission-denied over ADB; visor reads thermals from `dumpsys thermalservice` instead (45 sensors on Quest 3).
 - Screenshots of a sleeping headset return nothing; visor auto-wakes the display via the `prox_close` broadcast and restores the proximity sensor afterwards.
-- Screenshots are side-by-side stereo; the MCP/UI return the left eye for readability (full stereo PNG is kept on disk).
+- Screenshots and the live viewport are the per-eye display buffer, which is barrel-distorted for the headset lens (a fisheye look). Visor crops to the left eye and applies ffmpeg lens-correction so the MCP/UI output reads as a flat rectangular image (needs ffmpeg; the raw full-stereo PNG is still kept on disk).
 
 ## Development
 

@@ -147,3 +147,25 @@ class TestCast:
         cmd = popen.call_args.args[0]
         assert cmd[0] == "/usr/bin/scrcpy"
         assert "-s" in cmd and "S" in cmd
+
+
+class TestUndistortEye:
+    def test_returns_original_without_ffmpeg(self):
+        from PIL import Image
+
+        from visor.adb.capture import undistort_eye
+
+        img = Image.new("RGB", (64, 64))
+        with mock.patch("shutil.which", return_value=None):
+            assert undistort_eye(img) is img
+
+    def test_falls_back_when_ffmpeg_fails(self):
+        from PIL import Image
+
+        from visor.adb.capture import undistort_eye
+
+        img = Image.new("RGB", (64, 64))
+        with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=1, stdout=b"")
+                assert undistort_eye(img) is img

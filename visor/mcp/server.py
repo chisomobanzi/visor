@@ -129,8 +129,9 @@ def quest_screenshot(
         cropped_note = ""
         if width / height > 1.6:
             img = img.crop((0, 0, width // 2, height))
-            width = width // 2
-            cropped_note = ", cropped to left eye for viewing"
+            img = adb.undistort_eye(img)
+            width, height = img.size
+            cropped_note = ", cropped to left eye + lens-corrected for viewing"
         if width > _MAX_IMAGE_WIDTH:
             ratio = _MAX_IMAGE_WIDTH / width
             img = img.resize((_MAX_IMAGE_WIDTH, int(height * ratio)))

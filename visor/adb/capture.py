@@ -122,6 +122,41 @@ def screenshot(
     )
 
 
+def undistort_eye(img):
+    """De-fisheye a single-eye PIL image so it reads as a flat rectangular view.
+
+    Best-effort: uses the same ffmpeg lens-correction as the live viewport, so
+    stills and video look consistent. If ffmpeg isn't installed (or the call
+    fails), the image is returned unchanged.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return img
+
+    from PIL import Image
+
+    src = io.BytesIO()
+    img.convert("RGB").save(src, format="PNG")
+    vf = (
+        f"lenscorrection=cx=0.5:cy=0.5:k1={_LENS_K1}:k2={_LENS_K2}:i=bilinear,"
+        f"crop=iw*{_LENS_CROP}:ih*{_LENS_CROP}"
+    )
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "image2pipe",
+             "-i", "-", "-vf", vf, "-frames:v", "1", "-f", "image2pipe",
+             "-vcodec", "png", "-"],
+            input=src.getvalue(),
+            capture_output=True,
+            timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return img
+    if proc.returncode != 0 or not proc.stdout:
+        return img
+    return Image.open(io.BytesIO(proc.stdout))
+
+
 def screen_record(
     device_id: Optional[str] = None,
     duration_seconds: int = 30,

@@ -72,7 +72,7 @@ def info(device: Optional[str] = None):
 
 
 @app.get("/api/screenshot")
-def screenshot(device: Optional[str] = None, eye: str = "left"):
+def screenshot(device: Optional[str] = None, eye: str = "left", undistort: bool = True):
     serial = _device(device)
     path = os.path.join(tempfile.gettempdir(), f"visor-ui-{serial}.png")
     shot = _call(adb.screenshot, serial, path)
@@ -83,6 +83,8 @@ def screenshot(device: Optional[str] = None, eye: str = "left"):
         width, height = img.size
         if eye == "left" and width / height > 1.6:
             img = img.crop((0, 0, width // 2, height))
+            if undistort:
+                img = adb.undistort_eye(img)
         if img.width > 1600:
             ratio = 1600 / img.width
             img = img.resize((1600, int(img.height * ratio)))

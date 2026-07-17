@@ -15,6 +15,7 @@ from visor.adb.capture import (
     start_cast,
     start_screen_stream,
     stop_stream_processes,
+    undistort_eye,
 )
 from visor.adb.device import (
     connect_wireless,
@@ -75,6 +76,7 @@ __all__ = [
     "start_cast",
     "start_screen_stream",
     "stop_stream_processes",
+    "undistort_eye",
     # device
     "connect_wireless",
     "discover_devices",
