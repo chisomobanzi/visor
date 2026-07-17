@@ -766,5 +766,22 @@ def ui(
     ui_main(port=port, open_browser=not no_browser)
 
 
+@app.command("app")
+def app_window(
+    port: int = typer.Option(7700, "--port", "-p"),
+):
+    """Open the visor dashboard as a native desktop window."""
+    from visor.ui.server import launch_desktop_app
+
+    console.print(
+        "[green]visor[/green] → opening desktop app …  [dim](close the window to stop)[/dim]"
+    )
+    try:
+        launch_desktop_app(port=port)
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

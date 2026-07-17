@@ -446,7 +446,49 @@ def main(host: str = "127.0.0.1", port: int = 7700, open_browser: bool = True):
 
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(f"http://{host}:{port}")).start()
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    # Visor serves plain HTTP (+ an MJPEG stream), no websockets. Pin uvicorn to
+    # its bundled h11/no-ws handlers so a stray system `websockets`/`httptools`
+    # (e.g. via a system-site-packages venv) can't break startup.
+    uvicorn.run(app, host=host, port=port, log_level="warning", ws="none", http="h11")
+
+
+def run_server_thread(host: str = "127.0.0.1", port: int = 7700):
+    """Start the dashboard in a background daemon thread and return once it is
+    serving. Used by the desktop app, which needs the main thread for its GUI
+    loop. Signal handlers are disabled since we are not on the main thread.
+    """
+    import threading
+    import time
+
+    import uvicorn
+
+    config = uvicorn.Config(
+        app, host=host, port=port, log_level="warning", ws="none", http="h11"
+    )
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None
+    threading.Thread(target=server.run, daemon=True).start()
+    for _ in range(200):  # wait up to ~10s for startup
+        if server.started:
+            break
+        time.sleep(0.05)
+    return server
+
+
+def launch_desktop_app(host: str = "127.0.0.1", port: int = 7700):
+    """Open the dashboard in a native desktop window via pywebview."""
+    try:
+        import webview
+    except ImportError as e:
+        raise RuntimeError(
+            "The desktop app needs pywebview, which isn't installed.\n"
+            "  pipx:  pipx inject visor-dev pywebview\n"
+            "  pip:   pip install 'visor-dev[app]'"
+        ) from e
+
+    run_server_thread(host, port)
+    webview.create_window("Visor", f"http://{host}:{port}", width=1280, height=820)
+    webview.start()  # blocks until the window closes; the server thread is a daemon
 
 
 if __name__ == "__main__":

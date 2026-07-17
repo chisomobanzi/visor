@@ -39,6 +39,11 @@ dev = [
     "pytest-mock>=3.12.0",
     "ruff>=0.6",
 ]
+# Native desktop-app window (visor app). On Linux the GTK/WebKit backend uses
+# the system PyGObject + WebKit2GTK; no extra system libs needed on most desktops.
+app = [
+    "pywebview>=5.0",
+]
 
 [project.scripts]
 visor = "visor.cli.main:app"

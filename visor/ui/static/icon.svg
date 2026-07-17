@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d5efc"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <!-- head strap nubs -->
+  <rect x="22" y="116" width="22" height="24" rx="7" fill="#ffffff" opacity="0.55"/>
+  <rect x="212" y="116" width="22" height="24" rx="7" fill="#ffffff" opacity="0.55"/>
+  <!-- headset body -->
+  <rect x="38" y="90" width="180" height="92" rx="32" fill="#ffffff"/>
+  <!-- lenses -->
+  <circle cx="97" cy="136" r="25" fill="#4c1d95"/>
+  <circle cx="159" cy="136" r="25" fill="#4c1d95"/>
+  <!-- lens highlights -->
+  <circle cx="89" cy="128" r="7" fill="#ffffff" opacity="0.85"/>
+  <circle cx="151" cy="128" r="7" fill="#ffffff" opacity="0.85"/>
+</svg>
