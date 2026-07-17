@@ -106,6 +106,28 @@ class TestScreenStream:
         # ffmpeg reads from the adb process's stdout
         assert popen.call_args_list[1].kwargs["stdin"] is popen.return_value.stdout
 
+    def test_undistort_applied_by_default(self, adb):
+        from visor.adb.capture import start_screen_stream
+
+        adb.adb_path = "/usr/bin/adb"
+        with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with mock.patch("subprocess.Popen") as popen:
+                popen.return_value.stdout = mock.Mock()
+                start_screen_stream("S", adb=adb)
+        ff_cmd = popen.call_args_list[1].args[0]
+        assert any("lenscorrection" in part for part in ff_cmd)
+
+    def test_undistort_can_be_disabled(self, adb):
+        from visor.adb.capture import start_screen_stream
+
+        adb.adb_path = "/usr/bin/adb"
+        with mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with mock.patch("subprocess.Popen") as popen:
+                popen.return_value.stdout = mock.Mock()
+                start_screen_stream("S", undistort=False, adb=adb)
+        ff_cmd = popen.call_args_list[1].args[0]
+        assert not any("lenscorrection" in part for part in ff_cmd)
+
 
 class TestCast:
     def test_missing_scrcpy_raises_helpful_error(self, adb):

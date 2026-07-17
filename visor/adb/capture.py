@@ -14,6 +14,14 @@ from visor.adb.wrapper import ADBCommandError, ADBWrapper, get_adb
 from visor.utils.constants import MAX_SCREENRECORD_SECONDS
 from visor.utils.host import detached_popen_kwargs, install_hint
 
+# Quest shows a per-eye, barrel-distorted image warped for the physical lens, so
+# a raw capture looks like a fisheye shot through the lens. These ffmpeg
+# lenscorrection coefficients undo most of it; the crop trims residual black
+# edges. Tuned against Quest 3 capture; roughly right for Quest 2/Pro too.
+_LENS_K1 = -0.5
+_LENS_K2 = 0.06
+_LENS_CROP = 0.84
+
 
 @dataclass
 class Screenshot:
@@ -158,6 +166,7 @@ def start_screen_stream(
     quality: int = 7,
     bit_rate: str = "8M",
     crop_left_eye: bool = True,
+    undistort: bool = True,
     adb: Optional[ADBWrapper] = None,
 ) -> tuple[subprocess.Popen, subprocess.Popen]:
     """Start a live MJPEG stream of the headset screen.
@@ -186,7 +195,19 @@ def start_screen_stream(
         "exec-out", "screenrecord", "--output-format=h264",
         "--size", size, "--bit-rate", bit_rate, "-",
     ]
-    vf = ("crop=iw/2:ih:0:0," if crop_left_eye else "") + f"fps={fps}"
+    filters = []
+    if crop_left_eye:
+        filters.append("crop=iw/2:ih:0:0")
+    if undistort:
+        # Undo the Quest lens (barrel) distortion so the eye buffer reads as a
+        # flat rectangular view instead of a fisheye shot through the lens,
+        # then trim the residual black edges.
+        filters.append(
+            f"lenscorrection=cx=0.5:cy=0.5:k1={_LENS_K1}:k2={_LENS_K2}:i=bilinear"
+        )
+        filters.append(f"crop=iw*{_LENS_CROP}:ih*{_LENS_CROP}")
+    filters.append(f"fps={fps}")
+    vf = ",".join(filters)
     ffmpeg_cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error",
         "-f", "h264", "-i", "-",
