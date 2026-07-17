@@ -6,6 +6,7 @@ install/launch, capture, logs, performance.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import typer
@@ -267,14 +268,30 @@ def screenshot(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Save path (default ./screenshots/)"
     ),
+    clean: bool = typer.Option(
+        False,
+        "--clean",
+        "-c",
+        help="Save the de-fisheyed left eye instead of the raw stereo PNG (needs ffmpeg).",
+    ),
 ):
     """Take a screenshot (auto-wakes a sleeping headset)."""
     serial = resolve_device()
     with console.status("Capturing..."):
         shot = run(adb.screenshot, serial, output)
+        width, height, size = shot.width, shot.height, shot.size_bytes
+        if clean:
+            from PIL import Image
+
+            with Image.open(shot.path) as raw:
+                w, h = raw.size
+                eye = raw.crop((0, 0, w // 2, h)) if w / h > 1.6 else raw
+                img = eye.copy()  # detach from the file before it closes
+            img = adb.undistort_eye(img).convert("RGB")
+            img.save(shot.path)
+            width, height, size = img.width, img.height, os.path.getsize(shot.path)
     console.print(
-        f"[green]ok[/green] {shot.path} ({shot.width}x{shot.height}, "
-        f"{shot.size_bytes // 1024} KB)"
+        f"[green]ok[/green] {shot.path} ({width}x{height}, {size // 1024} KB)"
     )
 
 

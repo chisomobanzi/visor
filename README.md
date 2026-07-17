@@ -45,6 +45,7 @@ visor launch com.my.game
 visor apps                        # sideloaded apps
 
 visor screenshot                  # auto-wakes a sleeping headset
+visor screenshot --clean          # de-fisheyed single eye (rectangular; needs ffmpeg)
 visor record 30                   # 30s video
 visor cast                        # scrcpy casting
 

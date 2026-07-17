@@ -97,6 +97,37 @@ class TestErrors:
         assert "not found" in result.output.lower()
 
 
+class TestScreenshotClean:
+    def test_clean_crops_left_eye_and_undistorts(self, patch_adb, tmp_path):
+        from PIL import Image
+
+        from visor.adb.capture import Screenshot
+
+        png = tmp_path / "shot.png"
+        Image.new("RGB", (400, 200)).save(png)  # stereo-ish aspect 2.0 > 1.6
+        patch_adb("discover_devices", lambda: [QUEST])
+        patch_adb(
+            "screenshot",
+            lambda serial, output: Screenshot(
+                path=str(png), width=400, height=200, size_bytes=png.stat().st_size
+            ),
+        )
+        seen = {}
+
+        def fake_undistort(img):
+            seen["size"] = img.size
+            return img
+
+        patch_adb("undistort_eye", fake_undistort)
+
+        result = runner.invoke(app, ["screenshot", "--clean"])
+        assert result.exit_code == 0
+        # left eye of a 400x200 stereo frame is 200x200, and that's what
+        # undistort_eye receives and what gets written back
+        assert seen["size"] == (200, 200)
+        assert Image.open(png).size == (200, 200)
+
+
 class TestApps:
     def test_apps_listing(self, patch_adb):
         patch_adb("discover_devices", lambda: [QUEST])
