@@ -185,9 +185,14 @@
 
   /* ---------- logs ---------- */
   .logbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
-  .lvl-chips { display: flex; gap: 4px; }
+  .lvl-chips { display: flex; align-items: center; gap: 4px; }
+  .lvl-chips .lvl-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-right: 2px; }
   .lvl-chips button { padding: 5px 10px; border-radius: 999px; }
-  .lvl-chips button.sel { border-color: var(--lens); color: var(--lens); }
+  .lvl-chips button[data-l="V"], .lvl-chips button[data-l="D"] { color: var(--faint); }
+  .lvl-chips button[data-l="I"] { color: var(--good); }
+  .lvl-chips button[data-l="W"] { color: var(--warn); }
+  .lvl-chips button[data-l="E"] { color: var(--bad); }
+  #lvl-chips button.sel { border-color: var(--lens); color: var(--lens); }
   .logview {
     background: #0c0f14; border: 1px solid var(--line); border-radius: 10px;
     padding: 12px 0; font-family: var(--mono); font-size: 12px;
@@ -333,9 +338,13 @@
     <!-- ================= LOGS ================= -->
     <section id="logs">
       <div class="logbar">
-        <div class="lvl-chips" role="group" aria-label="Minimum level" id="lvl-chips">
-          <button data-l="V">V</button><button data-l="D">D</button><button data-l="I">I</button>
-          <button data-l="W" class="sel">W</button><button data-l="E">E</button>
+        <div class="lvl-chips" role="group" aria-label="Minimum log level" id="lvl-chips">
+          <span class="lvl-label">min level</span>
+          <button data-l="V" title="Verbose — show everything (very noisy)">V</button
+          ><button data-l="D" title="Debug and above">D</button
+          ><button data-l="I" title="Info and above">I</button
+          ><button data-l="W" class="sel" title="Warning and above">W</button
+          ><button data-l="E" title="Errors only">E</button>
         </div>
         <input id="log-tag" placeholder="tag (Unity, VrApi…)" size="14">
         <input id="log-grep" placeholder="grep pattern" size="16">
