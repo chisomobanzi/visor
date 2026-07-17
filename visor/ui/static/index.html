@@ -197,7 +197,9 @@
     background: #0c0f14; border: 1px solid var(--line); border-radius: 10px;
     padding: 12px 0; font-family: var(--mono); font-size: 12px;
     max-height: 560px; overflow: auto;
+    user-select: text; -webkit-user-select: text; cursor: text;
   }
+  .logview ::selection { background: rgba(107,203,223,.32); }
   .logline { padding: 1.5px 14px; display: flex; gap: 10px; white-space: pre-wrap; word-break: break-word; }
   .logline:hover { background: rgba(107,203,223,.04); }
   .logline .ts { color: var(--faint); flex-shrink: 0; }
@@ -350,6 +352,7 @@
         <input id="log-grep" placeholder="grep pattern" size="16">
         <button id="btn-logs">FETCH</button>
         <button id="btn-logs-live">FOLLOW</button>
+        <button id="btn-logs-copy" title="Copy all shown log lines to the clipboard">COPY</button>
         <button id="btn-crashes">CRASH REPORTS</button>
       </div>
       <div class="logview" id="logview"><div class="empty">Fetch logs, or FOLLOW to tail while you reproduce a bug.</div></div>
@@ -887,8 +890,10 @@ $("#lvl-chips").addEventListener("click", (ev) => {
   logLevel = b.dataset.l;
   document.querySelectorAll("#lvl-chips button").forEach(x => x.classList.toggle("sel", x === b));
 });
-function renderLogs(entries, append) {
+function renderLogs(entries, append, forceBottom) {
   const view = $("#logview");
+  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
+  const prevTop = view.scrollTop;
   if (!append) view.innerHTML = "";
   if (!entries.length && !view.children.length) {
     view.innerHTML = `<div class="empty">no matching entries — lower the level or clear filters</div>`;
@@ -905,22 +910,47 @@ function renderLogs(entries, append) {
     frag.appendChild(div);
   }
   view.appendChild(frag);
-  view.scrollTop = view.scrollHeight;
+  // Stick to the bottom on an explicit fetch or if you were already tailing;
+  // otherwise keep your place so a live refresh doesn't yank the view while
+  // you read or select.
+  if (forceBottom || atBottom) view.scrollTop = view.scrollHeight;
+  else view.scrollTop = prevTop;
 }
-async function fetchLogs() {
+// While you're selecting log text, don't let a live refresh wipe the selection.
+function logSelectionActive() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+  const view = $("#logview");
+  return view.contains(sel.anchorNode) || view.contains(sel.focusNode);
+}
+async function fetchLogs(fromFollow) {
+  if (fromFollow && logSelectionActive()) return;
   try {
     const q = new URLSearchParams({ level: logLevel, lines: 400 });
     if ($("#log-tag").value) q.set("tag", $("#log-tag").value);
     if ($("#log-grep").value) q.set("grep", $("#log-grep").value);
     const r = await api("/api/logs?" + q);
-    renderLogs(r.entries, false);
+    renderLogs(r.entries, false, !fromFollow);
   } catch (e) { fail(e); }
 }
-$("#btn-logs").addEventListener("click", fetchLogs);
+async function copyLogs() {
+  const lines = [...$("#logview").querySelectorAll(".logline")].map(d => {
+    const g = c => (d.querySelector(c)?.textContent || "");
+    return `${g(".ts")} ${g(".lv")} ${g(".tag")}  ${g(".msg")}`.replace(/\s+$/, "");
+  });
+  if (!lines.length) return;
+  try {
+    await navigator.clipboard.writeText(lines.join("\n"));
+    const btn = $("#btn-logs-copy"); btn.textContent = "COPIED ✓";
+    setTimeout(() => { btn.textContent = "COPY"; }, 1200);
+  } catch (e) { fail(e); }
+}
+$("#btn-logs").addEventListener("click", () => fetchLogs());
+$("#btn-logs-copy").addEventListener("click", copyLogs);
 $("#btn-logs-live").addEventListener("click", () => {
   const btn = $("#btn-logs-live");
   if (followTimer) { clearInterval(followTimer); followTimer = null; btn.textContent = "FOLLOW"; return; }
-  fetchLogs(); followTimer = setInterval(fetchLogs, 3000); btn.textContent = "STOP";
+  fetchLogs(); followTimer = setInterval(() => fetchLogs(true), 3000); btn.textContent = "STOP";
 });
 $("#btn-crashes").addEventListener("click", async () => {
   try {
