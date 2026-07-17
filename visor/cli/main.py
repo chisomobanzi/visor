@@ -783,5 +783,38 @@ def app_window(
         raise typer.Exit(1)
 
 
+@app.command("install-desktop")
+def install_desktop(
+    uninstall: bool = typer.Option(
+        False, "--uninstall", help="Remove the launcher and icon instead."
+    ),
+):
+    """Install an app-menu launcher + icon for `visor app` (Linux)."""
+    import sys
+
+    from visor.desktop import install_desktop_entry, uninstall_desktop_entry
+
+    if sys.platform != "linux":
+        console.print(
+            "[yellow]install-desktop is Linux-only (freedesktop .desktop entries). "
+            "On macOS/Windows, run `visor app` directly.[/yellow]"
+        )
+        raise typer.Exit(1)
+
+    if uninstall:
+        removed = uninstall_desktop_entry()
+        if removed:
+            console.print("[green]Visor launcher removed.[/green]")
+        else:
+            console.print("[yellow]No Visor launcher was installed.[/yellow]")
+        return
+
+    paths = install_desktop_entry()
+    console.print("[green]Visor launcher installed.[/green]")
+    console.print(f"  desktop entry: [dim]{paths['desktop']}[/dim]")
+    console.print(f"  icon:          [dim]{paths['icon']}[/dim]")
+    console.print("Find [bold]Visor[/bold] in your app menu, or run [bold]visor app[/bold].")
+
+
 if __name__ == "__main__":
     app()
