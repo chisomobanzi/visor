@@ -33,6 +33,17 @@ pip install visor-dev    # provides the `visor` command; from source:
 git clone https://github.com/chisomobanzi/visor && cd visor && pip install .
 ```
 
+### AppImage (Linux, no Python needed)
+
+```bash
+./packaging/appimage/build-appimage.sh --install   # builds, then installs to ~/Applications
+```
+
+Bundles its own CPython, so the only host requirement is `adb` (plus `ffmpeg`
+for live video). Double-clicking opens the dashboard; the CLI passes straight
+through — `./Visor-x86_64.AppImage devices`. Drop `--install` to just build
+into `packaging/appimage/dist/`.
+
 ## CLI quickstart
 
 ```bash

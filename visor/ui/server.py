@@ -620,20 +620,70 @@ def run_server_thread(host: str = "127.0.0.1", port: int = 7700):
     return server
 
 
-def launch_desktop_app(host: str = "127.0.0.1", port: int = 7700):
-    """Open the dashboard in a native desktop window via pywebview."""
+def wait_forever() -> None:
+    """Park the main thread while the daemon server thread keeps serving."""
+    import threading
+
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+
+
+def launch_desktop_app(
+    host: str = "127.0.0.1", port: int = 7700, fallback_to_browser: bool = True
+) -> Optional[str]:
+    """Open the dashboard in a native desktop window via pywebview.
+
+    Plenty of environments have no GTK/Qt Python bindings for pywebview to
+    drive: the AppImage's bundled interpreter can't see the system ones, and
+    a pip install may have neither. The dashboard is a web app either way, so
+    rather than dying with a toolkit traceback we hand it to the default
+    browser — the caller then keeps the process alive (see wait_forever).
+
+    Returns None once the native window has closed, or a one-line reason for
+    having fallen back to the browser (raised as RuntimeError instead when
+    fallback_to_browser is off).
+    """
+    import logging
+    import webbrowser
+
+    reason = ""
     try:
         import webview
-    except ImportError as e:
-        raise RuntimeError(
-            "The desktop app needs pywebview, which isn't installed.\n"
-            "  pipx:  pipx inject visor-dev pywebview\n"
-            "  pip:   pip install 'visor-dev[app]'"
-        ) from e
+    except ImportError:
+        webview = None
+        reason = (
+            "pywebview isn't installed — pipx inject visor-dev pywebview, "
+            "or pip install 'visor-dev[app]'"
+        )
 
-    run_server_thread(host, port)
-    webview.create_window("Visor", f"http://{host}:{port}", width=1280, height=820)
-    webview.start()  # blocks until the window closes; the server thread is a daemon
+    run_server_thread(host, port)  # both paths need the dashboard served
+
+    if webview is not None:
+        # pywebview dumps a full traceback per toolkit it fails to import
+        # before it raises. We report the outcome in one line ourselves, so
+        # silence its logger for the attempt when we have somewhere to fall
+        # back to; without a fallback the detail is all the user gets.
+        pywebview_log = logging.getLogger("pywebview")
+        prior_level = pywebview_log.level
+        if fallback_to_browser:
+            pywebview_log.setLevel(logging.CRITICAL)
+        try:
+            webview.create_window(
+                "Visor", f"http://{host}:{port}", width=1280, height=820
+            )
+            webview.start()  # blocks until the window closes
+            return None
+        except Exception as e:  # no GTK/Qt bindings, no display, ...
+            reason = f"no native window available — {type(e).__name__}: {e}"
+        finally:
+            pywebview_log.setLevel(prior_level)
+
+    if not fallback_to_browser:
+        raise RuntimeError(reason)
+    webbrowser.open(f"http://{host}:{port}")
+    return reason
 
 
 if __name__ == "__main__":

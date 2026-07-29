@@ -788,16 +788,20 @@ def app_window(
     port: int = typer.Option(7700, "--port", "-p"),
 ):
     """Open the visor dashboard as a native desktop window."""
-    from visor.ui.server import launch_desktop_app
+    from visor.ui.server import launch_desktop_app, wait_forever
 
     console.print(
         "[green]visor[/green] → opening desktop app …  [dim](close the window to stop)[/dim]"
     )
-    try:
-        launch_desktop_app(port=port)
-    except RuntimeError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
+    reason = launch_desktop_app(port=port)
+    if reason:
+        # No GTK/Qt for pywebview to drive — the dashboard is a web app, so
+        # the browser serves it just as well.
+        console.print(f"[yellow]Opened in your browser instead:[/yellow] [dim]{reason}[/dim]")
+        console.print(
+            f"[green]visor dashboard[/green] → http://127.0.0.1:{port} [dim](ctrl-c to stop)[/dim]"
+        )
+        wait_forever()
 
 
 @app.command("install-desktop")

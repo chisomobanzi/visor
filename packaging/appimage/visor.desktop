@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Visor
+GenericName=Quest Developer Toolkit
+Comment=Meta Quest developer dashboard
+Exec=visor
+Icon=visor
+Terminal=false
+Categories=Development;
+Keywords=quest;vr;adb;meta;headset;oculus;
+StartupNotify=true
+StartupWMClass=Visor

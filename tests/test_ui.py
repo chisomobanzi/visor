@@ -172,3 +172,70 @@ class TestShotGallery:
         )
         assert r.status_code == 400
 
+
+class TestDesktopApp:
+    """`visor app` must stay useful where pywebview has no toolkit to drive
+    (the AppImage's bundled interpreter can't see the system GTK bindings)."""
+
+    @pytest.fixture
+    def no_server(self, monkeypatch):
+        from visor.ui import server
+
+        opened = []
+        monkeypatch.setattr(server, "run_server_thread", lambda *a, **k: None)
+        monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+        return opened
+
+    def test_falls_back_to_browser_without_a_toolkit(self, monkeypatch, no_server):
+        import sys
+        import types
+
+        from visor.ui.server import launch_desktop_app
+
+        webview = types.ModuleType("webview")
+        webview.create_window = lambda *a, **k: None
+
+        def start():
+            raise Exception("You must have either QT or GTK")
+
+        webview.start = start
+        monkeypatch.setitem(sys.modules, "webview", webview)
+
+        reason = launch_desktop_app(port=7799)
+        assert "no native window" in reason
+        assert no_server == ["http://127.0.0.1:7799"]
+
+    def test_falls_back_when_pywebview_missing(self, monkeypatch, no_server):
+        import sys
+
+        from visor.ui.server import launch_desktop_app
+
+        monkeypatch.setitem(sys.modules, "webview", None)  # makes import fail
+
+        reason = launch_desktop_app(port=7799)
+        assert "pywebview isn't installed" in reason
+        assert no_server == ["http://127.0.0.1:7799"]
+
+    def test_no_fallback_raises(self, monkeypatch, no_server):
+        import sys
+
+        from visor.ui.server import launch_desktop_app
+
+        monkeypatch.setitem(sys.modules, "webview", None)
+        with pytest.raises(RuntimeError, match="pywebview"):
+            launch_desktop_app(port=7799, fallback_to_browser=False)
+        assert no_server == []
+
+    def test_native_window_returns_no_reason(self, monkeypatch, no_server):
+        import sys
+        import types
+
+        from visor.ui.server import launch_desktop_app
+
+        webview = types.ModuleType("webview")
+        webview.create_window = lambda *a, **k: None
+        webview.start = lambda: None
+        monkeypatch.setitem(sys.modules, "webview", webview)
+
+        assert launch_desktop_app(port=7799) is None
+        assert no_server == []
