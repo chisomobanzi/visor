@@ -179,10 +179,13 @@ class TestDesktopApp:
 
     @pytest.fixture
     def no_server(self, monkeypatch):
+        """No real server, no real window: yields the list of URLs that got
+        handed to the browser as a plain tab (the last-resort tier)."""
         from visor.ui import server
 
         opened = []
         monkeypatch.setattr(server, "run_server_thread", lambda *a, **k: None)
+        monkeypatch.setattr(server, "open_app_window", lambda url: None)
         monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
         return opened
 
@@ -202,7 +205,7 @@ class TestDesktopApp:
         monkeypatch.setitem(sys.modules, "webview", webview)
 
         reason = launch_desktop_app(port=7799)
-        assert "no native window" in reason
+        assert "no GTK/Qt" in reason
         assert no_server == ["http://127.0.0.1:7799"]
 
     def test_falls_back_when_pywebview_missing(self, monkeypatch, no_server):
@@ -239,3 +242,62 @@ class TestDesktopApp:
 
         assert launch_desktop_app(port=7799) is None
         assert no_server == []
+
+    def test_app_mode_window_beats_a_browser_tab(self, monkeypatch, no_server):
+        """No toolkit, but a Chromium-family browser around: that still gets
+        a real window, so we must not settle for a tab."""
+        import sys
+
+        from visor.ui import server
+
+        monkeypatch.setitem(sys.modules, "webview", None)
+        windowed = []
+        monkeypatch.setattr(
+            server, "open_app_window", lambda url: windowed.append(url) or "chromium"
+        )
+
+        assert server.launch_desktop_app(port=7799) is None
+        assert windowed == ["http://127.0.0.1:7799"]
+        assert no_server == []  # never fell through to a tab
+
+    def test_app_window_uses_its_own_browser_profile(self, monkeypatch):
+        """Pointed at the user's normal profile the browser hands the URL to
+        the running instance and exits at once, killing the dashboard with a
+        window still on screen."""
+        import shutil
+        import subprocess
+
+        from visor.ui import server
+
+        calls = []
+        monkeypatch.setattr(
+            shutil, "which", lambda n: "/usr/bin/chromium" if n == "chromium" else None
+        )
+        monkeypatch.setattr(subprocess, "run", lambda argv, **k: calls.append(argv))
+
+        assert server.open_app_window("http://127.0.0.1:7799") == "chromium"
+        argv = calls[0]
+        assert argv[0] == "/usr/bin/chromium"
+        assert "--app=http://127.0.0.1:7799" in argv
+        assert any(a.startswith("--user-data-dir=") for a in argv)
+
+
+class TestServerThread:
+    def test_bind_failure_is_loud(self, monkeypatch):
+        """A dashboard that never bound would give us a blank window."""
+        import uvicorn
+
+        from visor.ui import server
+
+        class DeadServer:
+            started = False
+
+            def __init__(self, config):
+                pass
+
+            def run(self):
+                return  # e.g. port already in use: uvicorn logs and returns
+
+        monkeypatch.setattr(uvicorn, "Server", DeadServer)
+        with pytest.raises(RuntimeError, match="could not serve"):
+            server.run_server_thread(port=7799)

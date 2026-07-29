@@ -793,10 +793,13 @@ def app_window(
     console.print(
         "[green]visor[/green] → opening desktop app …  [dim](close the window to stop)[/dim]"
     )
-    reason = launch_desktop_app(port=port)
+    try:
+        reason = launch_desktop_app(port=port)
+    except RuntimeError as e:  # nothing serving — a window would be blank
+        die(str(e))
     if reason:
-        # No GTK/Qt for pywebview to drive — the dashboard is a web app, so
-        # the browser serves it just as well.
+        # No window toolkit and no Chromium-family browser to borrow one
+        # from — the dashboard is a web app, so a tab serves it just as well.
         console.print(f"[yellow]Opened in your browser instead:[/yellow] [dim]{reason}[/dim]")
         console.print(
             f"[green]visor dashboard[/green] → http://127.0.0.1:{port} [dim](ctrl-c to stop)[/dim]"

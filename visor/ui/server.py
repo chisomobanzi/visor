@@ -612,12 +612,18 @@ def run_server_thread(host: str = "127.0.0.1", port: int = 7700):
     )
     server = uvicorn.Server(config)
     server.install_signal_handlers = lambda: None
-    threading.Thread(target=server.run, daemon=True).start()
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
     for _ in range(200):  # wait up to ~10s for startup
         if server.started:
-            break
+            return server
+        if not thread.is_alive():
+            break  # bind failed — uvicorn logged why and gave up
         time.sleep(0.05)
-    return server
+    raise RuntimeError(
+        f"could not serve the dashboard on {host}:{port} — "
+        "something else is probably using that port (try --port)"
+    )
 
 
 def wait_forever() -> None:
@@ -630,19 +636,76 @@ def wait_forever() -> None:
         pass
 
 
+# Chromium's --app mode gives us a real application window — no browser
+# chrome, its own taskbar entry — out of a browser the user already has.
+# Ordered by how likely each is to be the one they'd recognise.
+_APP_MODE_BROWSERS = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "brave-browser",
+    "microsoft-edge",
+    "vivaldi-stable",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+)
+
+
+def open_app_window(url: str) -> Optional[str]:
+    """Open `url` as a standalone window via a Chromium-family browser's
+    --app mode, blocking until the window is closed.
+
+    Returns the browser used, or None if there was no usable one.
+
+    The dedicated --user-data-dir is load-bearing, not just tidiness: aimed
+    at the normal profile the binary hands the URL to the already-running
+    browser and exits immediately, which would tear the dashboard down while
+    its window is still on screen.
+    """
+    import shutil
+    import subprocess
+
+    profile = Path.home() / ".visor" / "window"
+    for name in _APP_MODE_BROWSERS:
+        binary = shutil.which(name)
+        if not binary:
+            continue
+        profile.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                [
+                    binary,
+                    f"--app={url}",
+                    f"--user-data-dir={profile}",
+                    "--window-size=1280,860",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return Path(binary).name
+        except OSError:
+            continue
+    return None
+
+
 def launch_desktop_app(
     host: str = "127.0.0.1", port: int = 7700, fallback_to_browser: bool = True
 ) -> Optional[str]:
-    """Open the dashboard in a native desktop window via pywebview.
+    """Open the dashboard in a desktop window, best window first.
 
-    Plenty of environments have no GTK/Qt Python bindings for pywebview to
-    drive: the AppImage's bundled interpreter can't see the system ones, and
-    a pip install may have neither. The dashboard is a web app either way, so
-    rather than dying with a toolkit traceback we hand it to the default
-    browser — the caller then keeps the process alive (see wait_forever).
+    Three tiers, because the first one is often unavailable: pywebview needs
+    GTK/Qt Python bindings, which the AppImage's bundled interpreter can't
+    see and a pip install may not have either. Next best is a Chromium-family
+    browser in --app mode, which is still a real window. Failing that the
+    dashboard is a web app regardless, so we hand it to the default browser
+    as a tab and the caller keeps the process alive (see wait_forever).
 
-    Returns None once the native window has closed, or a one-line reason for
-    having fallen back to the browser (raised as RuntimeError instead when
+    Returns None once a window has closed, or a one-line reason for having
+    fallen back to a browser tab (raised as RuntimeError instead when
     fallback_to_browser is off).
     """
     import logging
@@ -658,7 +721,8 @@ def launch_desktop_app(
             "or pip install 'visor-dev[app]'"
         )
 
-    run_server_thread(host, port)  # both paths need the dashboard served
+    run_server_thread(host, port)  # every path needs the dashboard served
+    url = f"http://{host}:{port}"
 
     if webview is not None:
         # pywebview dumps a full traceback per toolkit it fails to import
@@ -670,19 +734,20 @@ def launch_desktop_app(
         if fallback_to_browser:
             pywebview_log.setLevel(logging.CRITICAL)
         try:
-            webview.create_window(
-                "Visor", f"http://{host}:{port}", width=1280, height=820
-            )
+            webview.create_window("Visor", url, width=1280, height=820)
             webview.start()  # blocks until the window closes
             return None
         except Exception as e:  # no GTK/Qt bindings, no display, ...
-            reason = f"no native window available — {type(e).__name__}: {e}"
+            reason = f"no GTK/Qt for pywebview — {type(e).__name__}: {e}"
         finally:
             pywebview_log.setLevel(prior_level)
 
+    if open_app_window(url):  # blocks until the window closes
+        return None
+
     if not fallback_to_browser:
         raise RuntimeError(reason)
-    webbrowser.open(f"http://{host}:{port}")
+    webbrowser.open(url)
     return reason
 
 
