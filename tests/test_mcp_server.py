@@ -91,6 +91,38 @@ class TestToolResponses:
             server.quest_install("/tmp/x.apk")
 
 
+class TestScreenshotContent:
+    """The image return is the one tool result that isn't plain JSON, so it is
+    also the one the SDK is most likely to break underneath us."""
+
+    def test_returns_an_image_block_and_a_caption(self, patch_adb, tmp_path):
+        import io
+
+        from PIL import Image as PILImage
+
+        from mcp.server.mcpserver import Image
+
+        from visor.adb.capture import Screenshot
+
+        stereo = tmp_path / "shot.png"
+        buf = io.BytesIO()
+        PILImage.new("RGB", (4128, 2208), (20, 60, 90)).save(buf, format="PNG")
+        stereo.write_bytes(buf.getvalue())
+
+        patch_adb("discover_devices", lambda: [QUEST])
+        patch_adb("undistort_eye", lambda img: img)  # ffmpeg-free
+        patch_adb(
+            "screenshot",
+            lambda *a, **k: Screenshot(str(stereo), 4128, 2208, stereo.stat().st_size),
+        )
+
+        image, caption = server.quest_screenshot()
+        assert isinstance(image, Image)
+        block = image.to_image_content()  # what the client actually receives
+        assert block.mime_type == "image/jpeg" and block.data
+        assert "4128x2208" in caption and "left eye" in caption
+
+
 class TestPerfTools:
     def test_perf_session_returns_summary_diagnosis_and_path(self, patch_adb, tmp_path, monkeypatch):
         from visor.adb.perf_session import PerfSession

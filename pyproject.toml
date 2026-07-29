@@ -24,8 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    # <2 until visor.mcp.server is ported: mcp 2.0 dropped mcp.server.fastmcp
-    "mcp>=1.2.0,<2",
+    "mcp>=2.0.0",
     "typer>=0.12.0",
     "rich>=13.0.0",
     "pillow>=10.0.0",

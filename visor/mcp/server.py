@@ -18,12 +18,12 @@ import tempfile
 from dataclasses import asdict
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.mcpserver import Image, MCPServer
 
 from visor import adb
 from visor.adb.wrapper import VisorError
 
-mcp = FastMCP(
+mcp = MCPServer(
     "visor-quest",
     instructions=(
         "Tools for interacting with a Meta Quest VR headset connected over "
@@ -38,7 +38,7 @@ _MAX_IMAGE_WIDTH = 1400
 
 
 class QuestError(Exception):
-    """Raised with user-actionable messages; FastMCP reports them as tool errors."""
+    """Raised with user-actionable messages; MCPServer reports them as tool errors."""
 
 
 def _resolve_device(device_id: Optional[str]) -> str:
