@@ -221,6 +221,22 @@
   .viewport .hint { color: var(--faint); font-family: var(--mono); font-size: 12px; padding: 60px; text-align: center; }
   .capbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
   .capbar .note { color: var(--faint); font-size: 12px; margin-left: auto; font-family: var(--mono); }
+  button.toggle[aria-pressed="true"] { border-color: rgba(107,203,223,.45); color: var(--lens); }
+
+  /* ---------- shot gallery ---------- */
+  .shotbar { display: flex; align-items: baseline; gap: 12px; margin: 26px 0 12px; }
+  .shotbar h2 { margin: 0; }
+  .shotbar .note { color: var(--faint); font-size: 11px; font-family: var(--mono); margin-left: auto; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  .shot { position: relative; background: #000; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .shot:hover { border-color: rgba(107,203,223,.4); }
+  .shot img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; cursor: zoom-in; }
+  .shot .meta { display: flex; justify-content: space-between; gap: 6px; padding: 5px 8px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  .shot .acts { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+  .shot:hover .acts, .shot:focus-within .acts { opacity: 1; }
+  .shot .acts button, .shot .acts .btn {
+    padding: 3px 7px; font-size: 9px; background: rgba(16,19,24,.88); line-height: 1.5; text-decoration: none;
+  }
 
   /* ---------- thermal ---------- */
   .thermal-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-family: var(--mono); font-size: 12px; }
@@ -302,11 +318,23 @@
           <option value="60">60 s</option><option value="120">120 s</option>
         </select>
         <button id="btn-rec">RECORD</button>
+        <button id="btn-autocopy" class="toggle" aria-pressed="true"
+                title="Copy every new capture to the clipboard">CLIPBOARD ON</button>
         <span class="note" id="cap-note">left-eye view</span>
       </div>
       <div class="viewport" id="vp">
         <div class="hint">Press CAPTURE to see what's on the headset.<br>LIVE VIEW streams real-time video.</div>
       </div>
+
+      <div class="shotbar">
+        <h2>Gallery</h2>
+        <span class="note" id="shot-count"></span>
+      </div>
+      <div id="shots" class="shots"></div>
+      <div id="shots-empty" class="card"><div class="empty">
+        Every CAPTURE lands here — saved as a PNG under ~/.visor/shots and
+        copied straight to your clipboard. Works mid-stream too.
+      </div></div>
     </section>
 
     <!-- ================= PERFORMANCE ================= -->
@@ -827,18 +855,114 @@ $("#btn-export").addEventListener("click", () => {
 
 /* ---------------- viewport ---------------- */
 let streaming = false;
-async function capture() {
-  const vp = $("#vp");
-  try {
-    $("#btn-shot").disabled = true;
-    const img = new Image();
-    img.src = "/api/screenshot?ts=" + Date.now();
-    await img.decode();
-    vp.innerHTML = ""; vp.appendChild(img);
-  } catch (e) { fail(new Error("capture failed — is the headset connected?")); }
-  finally { $("#btn-shot").disabled = false; }
+let autoCopy = localStorage.getItem("visor.autocopy") !== "0";
+const shotUrl = (name) => "/api/shots/" + encodeURIComponent(name);
+
+function paintAutoCopy() {
+  const b = $("#btn-autocopy");
+  b.setAttribute("aria-pressed", String(autoCopy));
+  b.textContent = autoCopy ? "CLIPBOARD ON" : "CLIPBOARD OFF";
 }
-$("#btn-shot").addEventListener("click", () => { if (!streaming) capture(); });
+$("#btn-autocopy").addEventListener("click", () => {
+  autoCopy = !autoCopy;
+  localStorage.setItem("visor.autocopy", autoCopy ? "1" : "0");
+  paintAutoCopy();
+});
+paintAutoCopy();
+
+async function copyShot(name) {
+  // PNG is the only image type browsers accept on the clipboard — which is
+  // why the gallery stores PNGs rather than the JPEGs the viewport streams.
+  const blob = await (await fetch(shotUrl(name))).blob();
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+}
+
+function showShot(shot) {
+  const vp = $("#vp");
+  const img = new Image();
+  img.src = shotUrl(shot.name);
+  img.alt = shot.name;
+  vp.innerHTML = ""; vp.appendChild(img);
+  $("#cap-note").textContent = `${shot.name} · ${shot.width}×${shot.height}`;
+}
+
+/* Pull the frame that's already painted in the <img> rather than firing a
+   screencap, which would stall the live stream for a couple of seconds. */
+function liveFrame() {
+  const img = $("#vp img");
+  if (!img || !img.naturalWidth) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+  canvas.getContext("2d").drawImage(img, 0, 0);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+async function capture() {
+  const btn = $("#btn-shot"), label = btn.textContent;
+  btn.disabled = true; btn.textContent = "CAPTURING…";
+  try {
+    let shot;
+    if (streaming) {
+      const blob = await liveFrame();
+      if (!blob) throw new Error("no live frame on screen yet — give it a second");
+      const body = new FormData();
+      body.append("file", blob, "frame.png");
+      shot = await api("/api/shots/upload", { method: "POST", body });
+    } else {
+      shot = await api("/api/shots", { method: "POST" });
+      showShot(shot);
+    }
+    refreshShots();
+    let msg = `Saved ${shot.name} to the gallery`;
+    if (autoCopy) {
+      try { await copyShot(shot.name); msg += " · copied to clipboard"; }
+      catch { msg += " · clipboard blocked, use COPY on the tile"; }
+    }
+    toast(msg);
+  } catch (e) { fail(e); }
+  finally { btn.disabled = false; btn.textContent = label; }
+}
+$("#btn-shot").addEventListener("click", capture);
+
+function shotClock(seconds) {
+  return new Date(seconds * 1000)
+    .toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+async function refreshShots() {
+  let data;
+  try { data = await api("/api/shots"); } catch { return; }  // gallery is best-effort
+  const wrap = $("#shots");
+  wrap.innerHTML = "";
+  $("#shots-empty").hidden = data.shots.length > 0;
+  $("#shot-count").textContent = data.shots.length
+    ? `${data.total} in ${data.dir}` : "";
+  for (const s of data.shots) {
+    const el = document.createElement("div");
+    el.className = "shot";
+    el.innerHTML = `
+      <img loading="lazy" src="${shotUrl(s.name)}?thumb=1" alt="">
+      <div class="acts">
+        <button data-act="copy" title="Copy image to clipboard">COPY</button>
+        <a class="btn" href="${shotUrl(s.name)}" download="${s.name}" title="Download PNG">SAVE</a>
+        <button data-act="del" class="danger" title="Delete">✕</button>
+      </div>
+      <div class="meta"><span></span><span>${s.width || "?"}×${s.height || "?"}</span></div>`;
+    el.querySelector(".meta span").textContent = shotClock(s.captured_at);
+    el.querySelector("img").addEventListener("click", () => {
+      if (streaming) stopStream();
+      showShot(s);
+    });
+    el.querySelector('[data-act="copy"]').addEventListener("click", async () => {
+      try { await copyShot(s.name); toast(`Copied ${s.name} to the clipboard`); }
+      catch { fail(new Error("the browser blocked the clipboard — use SAVE instead")); }
+    });
+    el.querySelector('[data-act="del"]').addEventListener("click", async () => {
+      try { await api(shotUrl(s.name), { method: "DELETE" }); refreshShots(); }
+      catch (e) { fail(e); }
+    });
+    wrap.appendChild(el);
+  }
+}
 
 function stopStream() {
   streaming = false;
@@ -1067,6 +1191,7 @@ function lazyLoad() {
   const id = location.hash.slice(1);
   if (loaded.has(id)) return; loaded.add(id);
   if (id === "apps") loadApps();
+  if (id === "viewport") refreshShots();
   if (id === "files") loadFiles("/sdcard/");
   if (id === "performance") { populatePerfApps(); refreshSessionList(); }
 }

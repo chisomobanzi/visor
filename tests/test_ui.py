@@ -84,3 +84,91 @@ class TestAPI:
             files={"file": ("notanapk.txt", b"hello", "text/plain")},
         )
         assert r.status_code == 400
+
+
+def _png(width, height, colour=(30, 90, 120)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), colour).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _size(data):
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as img:
+        return img.size
+
+
+@pytest.fixture
+def shots_dir(monkeypatch, tmp_path):
+    """Point the gallery at a throwaway directory, not the real ~/.visor."""
+    from visor.ui import server
+
+    directory = tmp_path / "shots"
+    directory.mkdir()
+    monkeypatch.setattr(server, "_shots_dir", lambda: directory)
+    return directory
+
+
+class TestShotGallery:
+    def test_upload_list_thumb_delete(self, shots_dir):
+        assert client.get("/api/shots").json() == {
+            "dir": str(shots_dir), "total": 0, "shots": []
+        }
+
+        r = client.post(
+            "/api/shots/upload", files={"file": ("frame.png", _png(640, 480), "image/png")}
+        )
+        assert r.status_code == 200
+        name = r.json()["name"]
+        assert (r.json()["width"], r.json()["height"]) == (640, 480)
+
+        listing = client.get("/api/shots").json()
+        assert listing["total"] == 1 and listing["shots"][0]["name"] == name
+
+        full = client.get(f"/api/shots/{name}")
+        assert full.headers["content-type"] == "image/png"
+
+        thumb = client.get(f"/api/shots/{name}?thumb=1")
+        assert thumb.headers["content-type"] == "image/jpeg"
+        assert max(_size(thumb.content)) <= 360 < max(_size(full.content))
+
+        assert client.delete(f"/api/shots/{name}").status_code == 200
+        assert client.get("/api/shots").json()["total"] == 0
+        assert client.delete(f"/api/shots/{name}").status_code == 404
+
+    def test_capture_crops_to_one_eye(self, patch_adb, shots_dir, tmp_path):
+        from visor.adb.capture import Screenshot
+
+        stereo = tmp_path / "stereo.png"
+        stereo.write_bytes(_png(4128, 2208))
+
+        patch_adb("discover_devices", lambda: [QUEST])
+        patch_adb("undistort_eye", lambda img: img)  # ffmpeg-free
+        patch_adb(
+            "screenshot",
+            lambda *a, **k: Screenshot(str(stereo), 4128, 2208, stereo.stat().st_size),
+        )
+
+        r = client.post("/api/shots")
+        assert r.status_code == 200
+        # 4128-wide stereo -> left eye (2064) -> capped at 1600
+        assert r.json()["width"] == 1600
+        assert (shots_dir / r.json()["name"]).is_file()
+
+    def test_path_traversal_blocked(self, shots_dir):
+        assert client.get("/api/shots/..%2F..%2Fetc%2Fpasswd").status_code == 404
+        assert client.delete("/api/shots/..%2F..%2Fsecret.png").status_code == 404
+
+    def test_upload_rejects_non_image(self, shots_dir):
+        r = client.post(
+            "/api/shots/upload", files={"file": ("x.png", b"not a png", "image/png")}
+        )
+        assert r.status_code == 400
+

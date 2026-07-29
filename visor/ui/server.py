@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -71,6 +72,24 @@ def info(device: Optional[str] = None):
     return asdict(_call(adb.get_device_info, _device(device)))
 
 
+_VIEW_MAX_WIDTH = 1600
+
+
+def _frame_for_view(img, eye: str = "left", undistort: bool = True):
+    """Crop a stereo device capture down to one eye, undo the lens barrel
+    distortion, and cap the width — the shape you actually want to look at,
+    paste into a chat, or attach to a bug report."""
+    width, height = img.size
+    if eye == "left" and width / height > 1.6:
+        img = img.crop((0, 0, width // 2, height))
+        if undistort:
+            img = adb.undistort_eye(img)
+    if img.width > _VIEW_MAX_WIDTH:
+        ratio = _VIEW_MAX_WIDTH / img.width
+        img = img.resize((_VIEW_MAX_WIDTH, int(img.height * ratio)))
+    return img.convert("RGB")
+
+
 @app.get("/api/screenshot")
 def screenshot(device: Optional[str] = None, eye: str = "left", undistort: bool = True):
     serial = _device(device)
@@ -80,21 +99,145 @@ def screenshot(device: Optional[str] = None, eye: str = "left", undistort: bool 
     from PIL import Image
 
     with Image.open(shot.path) as img:
-        width, height = img.size
-        if eye == "left" and width / height > 1.6:
-            img = img.crop((0, 0, width // 2, height))
-            if undistort:
-                img = adb.undistort_eye(img)
-        if img.width > 1600:
-            ratio = 1600 / img.width
-            img = img.resize((1600, int(img.height * ratio)))
         buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=88)
+        _frame_for_view(img, eye, undistort).save(buf, format="JPEG", quality=88)
     return Response(
         content=buf.getvalue(),
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store"},
     )
+
+
+# ------------------------------------------------------------ shot gallery
+# Captures are kept as PNGs on disk so they survive a dashboard restart, and
+# because PNG is the only image type browsers will put on the clipboard.
+
+
+def _shots_dir() -> Path:
+    path = Path.home() / ".visor" / "shots"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _shot_file(name: str) -> Path:
+    """Resolve a gallery shot by basename only — no path traversal."""
+    candidate = _shots_dir() / Path(name).name
+    if candidate.suffix.lower() != ".png" or not candidate.is_file():
+        raise HTTPException(404, f"no such shot: {Path(name).name}")
+    return candidate
+
+
+def _new_shot_file() -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = _shots_dir() / f"quest-{stamp}.png"
+    n = 2
+    while path.exists():
+        path = _shots_dir() / f"quest-{stamp}-{n}.png"
+        n += 1
+    return path
+
+
+def _shot_meta(path: Path) -> dict:
+    from PIL import Image
+
+    width = height = None
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+    except (OSError, ValueError):
+        pass
+    return {
+        "name": path.name,
+        "path": str(path),
+        "captured_at": path.stat().st_mtime,
+        "size_bytes": path.stat().st_size,
+        "width": width,
+        "height": height,
+    }
+
+
+@app.get("/api/shots")
+def shots_list(limit: int = 120):
+    files = sorted(
+        _shots_dir().glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    return {
+        "dir": str(_shots_dir()),
+        "total": len(files),
+        "shots": [_shot_meta(p) for p in files[:limit]],
+    }
+
+
+@app.post("/api/shots")
+def shot_capture(
+    device: Optional[str] = None, eye: str = "left", undistort: bool = True
+):
+    """Grab the headset screen and file it in the gallery."""
+    from PIL import Image
+
+    serial = _device(device)
+    tmp = os.path.join(tempfile.gettempdir(), f"visor-ui-{serial}.png")
+    shot = _call(adb.screenshot, serial, tmp)
+    dest = _new_shot_file()
+    with Image.open(shot.path) as img:
+        _frame_for_view(img, eye, undistort).save(dest, format="PNG")
+    return _shot_meta(dest)
+
+
+@app.post("/api/shots/upload")
+async def shot_upload(file: UploadFile):
+    """File a frame the browser grabbed off the live stream — capturing that
+    way keeps the stream running instead of interrupting it with screencap."""
+    from PIL import Image
+
+    data = await file.read()
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            frame = img.convert("RGB")
+    except (OSError, ValueError):
+        raise HTTPException(400, "not a readable image") from None
+    dest = _new_shot_file()
+    frame.save(dest, format="PNG")
+    return _shot_meta(dest)
+
+
+# (name, mtime) -> thumbnail JPEG bytes; shot files are never rewritten
+_thumb_cache: dict = {}
+
+
+@app.get("/api/shots/{name}")
+def shot_get(name: str, thumb: bool = False):
+    path = _shot_file(name)
+    if not thumb:
+        # served inline: the gallery renders it in an <img>, and the SAVE link
+        # supplies its own filename via the download attribute
+        return FileResponse(path, media_type="image/png")
+    key = (path.name, path.stat().st_mtime)
+    data = _thumb_cache.get(key)
+    if data is None:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((360, 360))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=78)
+        data = buf.getvalue()
+        if len(_thumb_cache) > 200:
+            _thumb_cache.clear()
+        _thumb_cache[key] = data
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "max-age=31536000, immutable"},
+    )
+
+
+@app.delete("/api/shots/{name}")
+def shot_delete(name: str):
+    path = _shot_file(name)
+    path.unlink()
+    return {"deleted": path.name}
 
 
 # serial -> (adb_proc, ffmpeg_proc) of the current live stream (last-wins)

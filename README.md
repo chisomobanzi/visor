@@ -111,7 +111,7 @@ visor ui        # opens http://127.0.0.1:7700 in your browser
 visor app       # same dashboard in a native desktop window (pip install visor-dev[app])
 ```
 
-Overview (battery/thermal lens gauges, tracking status), viewport with **real-time live video** (H.264 off the device via `screenrecord`, transcoded to an MJPEG stream — requires ffmpeg), performance charts sampled every 2.5s, filterable log viewer with crash reports, app management (install APK by upload, launch/stop/clear/uninstall), and a device file browser. Localhost-only by design.
+Overview (battery/thermal lens gauges, tracking status), viewport with **real-time live video** (H.264 off the device via `screenrecord`, transcoded to an MJPEG stream — requires ffmpeg), a **shot gallery** where every CAPTURE is saved as a PNG under `~/.visor/shots` and copied to your clipboard (capturing mid-stream grabs the on-screen frame without interrupting the video), performance charts sampled every 2.5s, filterable log viewer with crash reports, app management (install APK by upload, launch/stop/clear/uninstall), and a device file browser. Localhost-only by design.
 
 On Linux, `visor install-desktop` adds an app-menu launcher and icon so Visor opens like any other desktop app (`visor install-desktop --uninstall` removes it).
 
