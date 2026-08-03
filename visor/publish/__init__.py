@@ -9,10 +9,20 @@ tool is the only route that won't rot.
 
 from visor.publish.creds import Credentials, MissingCredentialsError
 from visor.publish.ovrtool import OvrToolError, OvrToolNotFoundError
+from visor.publish.upload import (
+    ConfirmationRequired,
+    PreflightError,
+    UploadError,
+    UploadResult,
+)
 
 __all__ = [
+    "ConfirmationRequired",
     "Credentials",
     "MissingCredentialsError",
     "OvrToolError",
     "OvrToolNotFoundError",
+    "PreflightError",
+    "UploadError",
+    "UploadResult",
 ]
