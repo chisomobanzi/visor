@@ -7,11 +7,14 @@ use .desktop files, so the CLI guards against them.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# Aliased: the functions below take a `data_home` argument that would
+# otherwise shadow the shared helper.
+from visor.utils.host import data_home as _data_home
 
 APP_ID = "visor"
 
@@ -29,11 +32,6 @@ Keywords=quest;vr;adb;meta;headset;oculus;
 StartupNotify=true
 StartupWMClass=Visor
 """
-
-
-def _data_home() -> Path:
-    xdg = os.environ.get("XDG_DATA_HOME")
-    return Path(xdg) if xdg else Path.home() / ".local" / "share"
 
 
 def _visor_exec() -> str:

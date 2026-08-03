@@ -1,15 +1,27 @@
-"""Host-OS helpers — install guidance and process-detach flags.
+"""Host-OS helpers — install guidance, data paths and process-detach flags.
 
 Visor talks to the headset entirely through adb, which runs on Linux,
 macOS, and Windows alike, so the library itself is cross-platform. These
-helpers keep the OS-specific bits (how to install a missing tool, how to
-detach a child process) in one place.
+helpers keep the OS-specific bits (how to install a missing tool, where
+user data lives, how to detach a child process) in one place.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from pathlib import Path
+
+
+def data_home() -> Path:
+    """Base directory for Visor's own persistent files (XDG on all platforms).
+
+    Used for the desktop launcher and the fetched ovr-platform-util; keeping
+    one definition means they can never disagree about where things live.
+    """
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return Path(xdg) if xdg else Path.home() / ".local" / "share"
 
 _INSTALL_HINTS = {
     "linux": {
