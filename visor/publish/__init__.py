@@ -7,6 +7,12 @@ That is deliberate: the upload protocol is undocumented, so wrapping Meta's own
 tool is the only route that won't rot.
 """
 
+from visor.publish.creds import Credentials, MissingCredentialsError
 from visor.publish.ovrtool import OvrToolError, OvrToolNotFoundError
 
-__all__ = ["OvrToolError", "OvrToolNotFoundError"]
+__all__ = [
+    "Credentials",
+    "MissingCredentialsError",
+    "OvrToolError",
+    "OvrToolNotFoundError",
+]

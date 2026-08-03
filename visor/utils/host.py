@@ -23,6 +23,13 @@ def data_home() -> Path:
     xdg = os.environ.get("XDG_DATA_HOME")
     return Path(xdg) if xdg else Path.home() / ".local" / "share"
 
+
+def config_home() -> Path:
+    """Base directory for Visor's user-editable configuration."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    return Path(xdg) if xdg else Path.home() / ".config"
+
+
 _INSTALL_HINTS = {
     "linux": {
         "adb": "sudo apt install android-sdk-platform-tools  (or: sudo pacman -S android-tools)",
