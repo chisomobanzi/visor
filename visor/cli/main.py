@@ -7,6 +7,7 @@ install/launch, capture, logs, performance.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -15,6 +16,11 @@ from rich.table import Table
 
 from visor import adb
 from visor.adb.wrapper import VisorError
+from visor.publish.creds import load as load_credentials
+from visor.publish.ovrtool import fetch as ovrtool_fetch
+from visor.publish.ovrtool import version as ovrtool_version
+from visor.publish.upload import is_release_channel
+from visor.publish.upload import upload as publish_upload
 
 app = typer.Typer(
     name="visor",
@@ -838,6 +844,91 @@ def install_desktop(
     console.print(f"  desktop entry: [dim]{paths['desktop']}[/dim]")
     console.print(f"  icon:          [dim]{paths['icon']}[/dim]")
     console.print("Find [bold]Visor[/bold] in your app menu, or run [bold]visor app[/bold].")
+
+
+@app.command("fetch-tool")
+def fetch_tool():
+    """Download Meta's ovr-platform-util, needed to upload builds."""
+    console.print(
+        "Fetching [bold]ovr-platform-util[/bold] from Meta. It is Meta's tool, "
+        "not part of Visor — Visor can't redistribute it, so it is downloaded "
+        "on request and kept alongside your other user data."
+    )
+    try:
+        path = ovrtool_fetch()
+    except VisorError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    found_version = ovrtool_version(path)
+    suffix = f" (version {found_version})" if found_version else ""
+    console.print(f"[green]Ready{suffix}.[/green]")
+    # soft_wrap: a path broken across lines is a path you can't copy.
+    console.print(f"  [dim]{path}[/dim]", soft_wrap=True)
+
+
+@app.command()
+def upload(
+    apk: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        help="Path to the .apk to upload",
+    ),
+    channel: str = typer.Option(
+        "ALPHA", "--channel", "-c", help="Release channel (ALPHA, BETA, RC, store)"
+    ),
+    age_group: Optional[str] = typer.Option(
+        None,
+        "--age-group",
+        help="TEENS_AND_ADULTS, MIXED_AGES or CHILDREN. "
+        "Without one, Meta holds the build as a draft.",
+    ),
+    notes: Optional[str] = typer.Option(
+        None, "--notes", "-n", help="Release notes shown to channel testers"
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Required to publish to the live store channel"
+    ),
+):
+    """Upload a build to a Meta Horizon release channel."""
+    if is_release_channel(channel) and not yes:
+        console.print(
+            f"[red]Channel {channel!r} is the live Meta Horizon store.[/red]\n"
+            "Everyone who owns the app gets this build. "
+            "Re-run with [bold]--yes[/bold] if that is what you meant."
+        )
+        raise typer.Exit(1)
+
+    try:
+        credentials = load_credentials()
+    except VisorError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"Uploading [bold]{Path(apk).name}[/bold] to [bold]{channel}[/bold]…")
+    try:
+        result = publish_upload(
+            apk,
+            channel=channel,
+            credentials=credentials,
+            age_group=age_group,
+            notes=notes,
+            confirm_release=yes,
+            on_line=lambda line: console.print(f"  [dim]{line}[/dim]"),
+        )
+    except VisorError as e:
+        # The message is already redacted by the upload layer.
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    for note in result.preflight_notes:
+        console.print(f"[yellow]{note}[/yellow]")
+    console.print(f"[green]Uploaded to {channel}.[/green]")
+    console.print(
+        "[dim]Channels start empty — invite testers in the Meta dashboard "
+        "before anyone can install it.[/dim]"
+    )
 
 
 if __name__ == "__main__":
