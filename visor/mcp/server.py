@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+from pathlib import Path
 from dataclasses import asdict
 from typing import Optional
 
@@ -22,6 +23,9 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from visor import adb
 from visor.adb.wrapper import VisorError
+from visor.publish.creds import load as load_credentials
+from visor.publish.upload import is_release_channel, preflight
+from visor.publish.upload import upload as publish_upload
 
 mcp = MCPServer(
     "visor-quest",
@@ -548,6 +552,89 @@ def quest_tracking(device_id: Optional[str] = None) -> dict:
     tracking = _wrap(adb.get_tracking_status, serial)
     tracking["guardian"] = _wrap(adb.get_guardian_status, serial)
     return tracking
+
+
+@mcp.tool()
+def quest_upload_build(
+    apk: str,
+    channel: str,
+    confirm: bool = False,
+    age_group: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> dict:
+    """Upload a Quest build to a Meta Horizon TEST release channel.
+
+    This sends the APK to Meta's servers and cannot be undone by running it
+    again. Ask the user before calling it, and pass confirm=True only once
+    they have said yes to this specific build and channel.
+
+    The live storefront channel ("store") is refused here regardless of
+    confirm — publishing to everyone who owns the app is done by a human at
+    a terminal with `visor upload --channel store --yes`.
+
+    Requires OCULUS_APP_ID and OCULUS_APP_SECRET (environment or
+    ~/.config/visor/credentials) and ovr-platform-util (`visor fetch-tool`).
+
+    Args:
+        apk: Path to the .apk to upload.
+        channel: Release channel, e.g. ALPHA, BETA, RC.
+        confirm: Must be True. The user has approved this exact upload.
+        age_group: TEENS_AND_ADULTS, MIXED_AGES or CHILDREN. Without one,
+            Meta holds the build in draft status.
+        notes: Release notes shown to channel testers.
+    """
+    if is_release_channel(channel):
+        raise QuestError(
+            f"Refusing to upload to {channel!r} — that is the live Meta Horizon "
+            "store, visible to everyone who owns the app. If the user really "
+            "wants to publish, they can run: "
+            "visor upload <apk> --channel store --yes"
+        )
+
+    # Validate before asking for consent: a model should learn the APK is
+    # unusable without first making the user approve uploading it.
+    try:
+        preflight(Path(apk), channel, age_group)
+    except VisorError as e:
+        raise QuestError(str(e)) from None
+
+    if not confirm:
+        raise QuestError(
+            "Refusing to upload without confirmation. Uploading sends the build "
+            f"to Meta's {channel} channel and cannot be undone. Ask the user, "
+            "then call again with confirm=True."
+        )
+
+    try:
+        credentials = load_credentials()
+    except VisorError as e:
+        raise QuestError(str(e)) from None
+
+    try:
+        result = publish_upload(
+            apk,
+            channel=channel,
+            credentials=credentials,
+            age_group=age_group,
+            notes=notes,
+            # Deliberately not forwarded: confirm_release exists to unlock the
+            # store channel, which this tool has already refused outright.
+        )
+    except VisorError as e:
+        # Already redacted by the upload layer, but the transcript is the last
+        # place a secret should be able to land.
+        raise QuestError(credentials.redact(str(e))) from None
+
+    return {
+        "succeeded": result.succeeded,
+        "channel": channel,
+        "notes": list(result.preflight_notes),
+        "output": result.output,
+        "next_step": (
+            "Release channels start empty. Invite testers by email in the Meta "
+            "developer dashboard before anyone can install this build."
+        ),
+    }
 
 
 def main():
