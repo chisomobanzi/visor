@@ -102,6 +102,42 @@ class TestUploadCommand:
         assert "draft" in result.output
 
 
+class TestDryRun:
+    """`--dry-run` is the rehearsal: real credentials, real network, real
+    validation by Meta, and no build in front of testers afterwards."""
+
+    def test_asks_the_library_to_validate_only(self, apk, stub_publish):
+        result = runner.invoke(app, ["upload", str(apk), "--dry-run"])
+        assert result.exit_code == 0
+        assert stub_publish["validate_only"] is True
+
+    def test_is_off_by_default(self, apk, stub_publish):
+        runner.invoke(app, ["upload", str(apk)])
+        assert stub_publish.get("validate_only") is not True
+
+    def test_says_nothing_was_uploaded(self, apk, monkeypatch):
+        """Otherwise a green 'Uploaded to ALPHA' would be a lie."""
+        def validated(apk, channel, credentials, **kwargs):
+            return upload_mod.UploadResult(
+                succeeded=True,
+                command="...",
+                output="",
+                validated_only=True,
+            )
+
+        monkeypatch.setattr("visor.cli.main.publish_upload", validated)
+        result = runner.invoke(app, ["upload", str(apk), "--dry-run"])
+        assert "not uploaded" in result.output.lower()
+
+    def test_can_rehearse_the_store_without_the_yes_flag(self, apk, stub_publish):
+        """Nothing is published, so the gate has nothing left to guard."""
+        result = runner.invoke(
+            app, ["upload", str(apk), "--channel", "store", "--dry-run"]
+        )
+        assert result.exit_code == 0
+        assert stub_publish["validate_only"] is True
+
+
 class TestUploadRefusals:
     def test_missing_apk_exits_nonzero(self, tmp_path):
         result = runner.invoke(app, ["upload", str(tmp_path / "nope.apk")])

@@ -89,6 +89,26 @@ class TestStoreIsOffLimits:
         assert uploads[0].get("confirm_release") is not True
 
 
+class TestValidateOnly:
+    """Validating is the one thing here that changes nothing, so it is the one
+    thing that should not need a human to unlock it."""
+
+    def test_needs_no_confirmation(self, apk, uploads):
+        server.quest_upload_build(apk=str(apk), channel="ALPHA", validate_only=True)
+        assert uploads[0]["validate_only"] is True
+
+    def test_allowed_against_the_store(self, apk, uploads):
+        server.quest_upload_build(apk=str(apk), channel="store", validate_only=True)
+        assert len(uploads) == 1
+
+    def test_still_refuses_a_bad_apk(self, tmp_path, uploads):
+        with pytest.raises(server.QuestError):
+            server.quest_upload_build(
+                apk=str(tmp_path / "nope.apk"), channel="ALPHA", validate_only=True
+            )
+        assert uploads == []
+
+
 class TestResult:
     def test_reports_success_and_channel(self, apk, uploads):
         result = server.quest_upload_build(

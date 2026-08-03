@@ -54,6 +54,8 @@ class UploadResult:
     #: Soft warnings raised by preflight. Kept separate from `output` so a
     #: caller can never mistake one of our notes for something Meta said.
     preflight_notes: tuple[str, ...] = ()
+    #: True when Meta checked the build and nothing was published.
+    validated_only: bool = False
 
 
 def is_release_channel(channel: str) -> bool:
@@ -134,6 +136,8 @@ def build_argv(
     channel: str,
     age_group: Optional[str] = None,
     notes: Optional[str] = None,
+    validate_only: bool = False,
+    wait_for_postprocessing: bool = True,
 ) -> list[str]:
     """The exact command line, secret included — see `redacted_argv` for logging."""
     argv = [
@@ -156,6 +160,15 @@ def build_argv(
         argv += ["--age-group", normalised_age]
     if notes:
         argv += ["--notes", notes]
+    if validate_only:
+        # Meta checks the build and stops. Nothing is published, so there is
+        # also nothing to post-process.
+        argv.append("--validate")
+    elif wait_for_postprocessing:
+        # Malware and security checks run after the bytes land, and a build
+        # that fails them was not really uploaded. Without this the utility
+        # exits 0 long before anyone knows that.
+        argv.append("--wait-for-postprocessing")
     return argv
 
 
@@ -188,16 +201,21 @@ def upload(
     binary: Optional[str | Path] = None,
     confirm_release: bool = False,
     on_line: Optional[Callable[[str], None]] = None,
+    validate_only: bool = False,
 ) -> UploadResult:
     """Upload a build, streaming redacted progress lines to `on_line`.
 
     `confirm_release` only unlocks the live store channel; it relaxes nothing
     else, so a caller that sets it still gets every other preflight check.
+
+    `validate_only` asks Meta to check the build and stop. It exercises the
+    credentials, the network and Meta's own validation without putting a build
+    in front of testers, which makes it the honest way to rehearse an upload.
     """
     apk = Path(apk)
     preflight_notes = preflight(apk, channel, age_group)
 
-    if is_release_channel(channel) and not confirm_release:
+    if is_release_channel(channel) and not confirm_release and not validate_only:
         raise ConfirmationRequired(
             f"Channel {channel!r} is the live Meta Horizon store. "
             "Re-run with explicit confirmation if you meant to publish "
@@ -205,7 +223,15 @@ def upload(
         )
 
     resolved = Path(binary) if binary else require()
-    argv = build_argv(resolved, credentials, apk, channel, age_group, notes)
+    argv = build_argv(
+        resolved,
+        credentials,
+        apk,
+        channel,
+        age_group,
+        notes,
+        validate_only=validate_only,
+    )
     shown = " ".join(redacted_argv(argv, credentials))
 
     process = _spawn(argv)
@@ -225,6 +251,7 @@ def upload(
         command=shown,
         output="\n".join(collected),
         preflight_notes=tuple(preflight_notes),
+        validated_only=validate_only,
     )
 
 

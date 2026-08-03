@@ -561,6 +561,7 @@ def quest_upload_build(
     confirm: bool = False,
     age_group: Optional[str] = None,
     notes: Optional[str] = None,
+    validate_only: bool = False,
 ) -> dict:
     """Upload a Quest build to a Meta Horizon TEST release channel.
 
@@ -582,8 +583,12 @@ def quest_upload_build(
         age_group: TEENS_AND_ADULTS, MIXED_AGES or CHILDREN. Without one,
             Meta holds the build in draft status.
         notes: Release notes shown to channel testers.
+        validate_only: Ask Meta to check the build and stop. Nothing is
+            published, so this needs no confirmation and works on any
+            channel. Prefer it whenever the question is "would this
+            upload work?".
     """
-    if is_release_channel(channel):
+    if is_release_channel(channel) and not validate_only:
         raise QuestError(
             f"Refusing to upload to {channel!r} — that is the live Meta Horizon "
             "store, visible to everyone who owns the app. If the user really "
@@ -598,7 +603,7 @@ def quest_upload_build(
     except VisorError as e:
         raise QuestError(str(e)) from None
 
-    if not confirm:
+    if not confirm and not validate_only:
         raise QuestError(
             "Refusing to upload without confirmation. Uploading sends the build "
             f"to Meta's {channel} channel and cannot be undone. Ask the user, "
@@ -617,6 +622,7 @@ def quest_upload_build(
             credentials=credentials,
             age_group=age_group,
             notes=notes,
+            validate_only=validate_only,
             # Deliberately not forwarded: confirm_release exists to unlock the
             # store channel, which this tool has already refused outright.
         )
@@ -630,8 +636,12 @@ def quest_upload_build(
         "channel": channel,
         "notes": list(result.preflight_notes),
         "output": result.output,
+        "validated_only": result.validated_only,
         "next_step": (
-            "Release channels start empty. Invite testers by email in the Meta "
+            "Meta validated the build. Nothing was uploaded — call again with "
+            "validate_only=False and confirm=True to publish it."
+            if result.validated_only
+            else "Release channels start empty. Invite testers by email in the Meta "
             "developer dashboard before anyone can install this build."
         ),
     }

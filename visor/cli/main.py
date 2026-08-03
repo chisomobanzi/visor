@@ -890,9 +890,14 @@ def upload(
     yes: bool = typer.Option(
         False, "--yes", help="Required to publish to the live store channel"
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Let Meta validate the build, then stop without uploading it",
+    ),
 ):
     """Upload a build to a Meta Horizon release channel."""
-    if is_release_channel(channel) and not yes:
+    if is_release_channel(channel) and not yes and not dry_run:
         console.print(
             f"[red]Channel {channel!r} is the live Meta Horizon store.[/red]\n"
             "Everyone who owns the app gets this build. "
@@ -906,7 +911,8 @@ def upload(
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
 
-    console.print(f"Uploading [bold]{Path(apk).name}[/bold] to [bold]{channel}[/bold]…")
+    verb = "Validating" if dry_run else "Uploading"
+    console.print(f"{verb} [bold]{Path(apk).name}[/bold] to [bold]{channel}[/bold]…")
     try:
         result = publish_upload(
             apk,
@@ -915,6 +921,7 @@ def upload(
             age_group=age_group,
             notes=notes,
             confirm_release=yes,
+            validate_only=dry_run,
             on_line=lambda line: console.print(f"  [dim]{line}[/dim]"),
         )
     except VisorError as e:
@@ -924,6 +931,14 @@ def upload(
 
     for note in result.preflight_notes:
         console.print(f"[yellow]{note}[/yellow]")
+
+    if result.validated_only:
+        console.print(f"[green]Build validated for {channel}.[/green]")
+        console.print(
+            "[dim]It was not uploaded — drop --dry-run to publish it.[/dim]"
+        )
+        return
+
     console.print(f"[green]Uploaded to {channel}.[/green]")
     console.print(
         "[dim]Channels start empty — invite testers in the Meta dashboard "

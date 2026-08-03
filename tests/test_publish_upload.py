@@ -159,6 +159,93 @@ class TestBuildArgv:
         assert "--disable-progress-bar" in argv
 
 
+class TestValidateOnly:
+    """`--validate` runs the whole upload path against Meta and stops short of
+    publishing — the only way to prove credentials and an APK are good without
+    putting a build in front of testers."""
+
+    def test_flag_absent_by_default(self, tmp_path):
+        apk = make_apk(tmp_path / "a.apk")
+        argv = upload.build_argv("/bin/ovr", CREDS, apk, channel="ALPHA")
+        assert "--validate" not in argv
+
+    def test_flag_present_when_asked(self, tmp_path):
+        apk = make_apk(tmp_path / "a.apk")
+        argv = upload.build_argv(
+            "/bin/ovr", CREDS, apk, channel="ALPHA", validate_only=True
+        )
+        assert "--validate" in argv
+
+    def test_upload_passes_it_through(self, tmp_path, monkeypatch):
+        apk = make_apk(tmp_path / "a.apk")
+        seen = {}
+
+        def record(argv):
+            seen["argv"] = argv
+            return FakeProcess(["ok\n"])
+
+        monkeypatch.setattr(upload, "_spawn", record)
+        upload.upload(
+            apk,
+            channel="ALPHA",
+            credentials=CREDS,
+            binary="/bin/ovr",
+            validate_only=True,
+        )
+        assert "--validate" in seen["argv"]
+
+    def test_validating_against_store_needs_no_consent(self, tmp_path, monkeypatch):
+        """Nothing is published, so the live-store gate has nothing to protect."""
+        apk = make_apk(tmp_path / "a.apk")
+        monkeypatch.setattr(upload, "_spawn", lambda argv: FakeProcess(["ok\n"]))
+        result = upload.upload(
+            apk,
+            channel="store",
+            credentials=CREDS,
+            binary="/bin/ovr",
+            validate_only=True,
+            age_group="MIXED_AGES",
+        )
+        assert result.succeeded
+
+    def test_result_says_nothing_was_uploaded(self, tmp_path, monkeypatch):
+        apk = make_apk(tmp_path / "a.apk")
+        monkeypatch.setattr(upload, "_spawn", lambda argv: FakeProcess(["ok\n"]))
+        result = upload.upload(
+            apk,
+            channel="ALPHA",
+            credentials=CREDS,
+            binary="/bin/ovr",
+            validate_only=True,
+        )
+        assert result.validated_only
+
+
+class TestPostProcessing:
+    """Meta runs malware and security checks after the bytes land. A build that
+    fails them is not uploaded, whatever the upload step said."""
+
+    def test_waits_by_default(self, tmp_path):
+        apk = make_apk(tmp_path / "a.apk")
+        argv = upload.build_argv("/bin/ovr", CREDS, apk, channel="ALPHA")
+        assert "--wait-for-postprocessing" in argv
+
+    def test_can_be_turned_off(self, tmp_path):
+        apk = make_apk(tmp_path / "a.apk")
+        argv = upload.build_argv(
+            "/bin/ovr", CREDS, apk, channel="ALPHA", wait_for_postprocessing=False
+        )
+        assert "--wait-for-postprocessing" not in argv
+
+    def test_not_requested_when_only_validating(self, tmp_path):
+        """There is no build to post-process; asking would just be noise."""
+        apk = make_apk(tmp_path / "a.apk")
+        argv = upload.build_argv(
+            "/bin/ovr", CREDS, apk, channel="ALPHA", validate_only=True
+        )
+        assert "--wait-for-postprocessing" not in argv
+
+
 class TestRedactedArgv:
     """What gets logged, printed, or handed back to an MCP client."""
 
