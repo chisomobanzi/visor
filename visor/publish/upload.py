@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 from visor.adb.wrapper import VisorError
+from visor.publish import apk as apk_reader
+from visor.publish import audit as store_audit
 from visor.publish.creds import Credentials
 from visor.publish.ovrtool import require
 
@@ -86,11 +88,21 @@ def preflight(
     apk: Path,
     channel: str,
     age_group: Optional[str] = None,
+    *,
+    audit: bool = True,
+    expect_package: Optional[str] = None,
+    channel_version_code: Optional[int] = None,
 ) -> list[str]:
     """Check what can be checked locally. Returns notes worth showing the user.
 
     Hard problems raise; soft ones come back as notes, because they are things
     a user may genuinely have meant (a deliberate draft, a deliberate release).
+
+    The second half of this opens the APK. Everything Meta rejects a build for
+    is already written in the file — the signing key, the architectures, the
+    orientation, the version code — and Meta only says so once the whole ~800 MB
+    has gone over the wire. `audit=False` waives it, because Meta's rules move
+    and a stale check of ours must never be the thing that stops a release.
     """
     apk = Path(apk)
 
@@ -126,7 +138,57 @@ def preflight(
             f"Channel is {channel!r} — this is the live store, visible to "
             "everyone who owns the app."
         )
+
+    if audit:
+        notes.extend(
+            _audit_notes(
+                apk,
+                expect_package=expect_package,
+                channel_version_code=channel_version_code,
+            )
+        )
     return notes
+
+
+def _audit_notes(
+    apk: Path,
+    *,
+    expect_package: Optional[str],
+    channel_version_code: Optional[int],
+) -> list[str]:
+    """Run the store audit, raising on blockers and returning its warnings.
+
+    A file this reader cannot parse is a note, never a refusal: an APK we choke
+    on may be perfectly good, and refusing it would make our reader the gate
+    rather than Meta's rules.
+    """
+    try:
+        info = apk_reader.inspect(apk)
+    except apk_reader.ApkError as error:
+        return [f"Could not read the APK, so the store audit was skipped: {error}"]
+
+    report = store_audit.run(
+        info,
+        expect_package=expect_package,
+        channel_version_code=channel_version_code,
+    )
+    if report.blockers:
+        detail = "\n".join(
+            f"  - {check.title}: {check.detail}"
+            + (f"\n    {check.hint}" if check.hint else "")
+            for check in report.blockers
+        )
+        plural = "" if len(report.blockers) == 1 else "s"
+        raise PreflightError(
+            f"Meta will reject this build ({len(report.blockers)} blocker{plural}):\n"
+            f"{detail}\n"
+            "Fix these, or re-run with the store audit waived if you believe "
+            "the check is wrong."
+        )
+    return [
+        f"{check.title}: {check.detail}" + (f" {check.hint}" if check.hint else "")
+        for check in report.warnings
+    ]
 
 
 def build_argv(
@@ -202,6 +264,9 @@ def upload(
     confirm_release: bool = False,
     on_line: Optional[Callable[[str], None]] = None,
     validate_only: bool = False,
+    audit: bool = True,
+    expect_package: Optional[str] = None,
+    channel_version_code: Optional[int] = None,
 ) -> UploadResult:
     """Upload a build, streaming redacted progress lines to `on_line`.
 
@@ -213,7 +278,14 @@ def upload(
     in front of testers, which makes it the honest way to rehearse an upload.
     """
     apk = Path(apk)
-    preflight_notes = preflight(apk, channel, age_group)
+    preflight_notes = preflight(
+        apk,
+        channel,
+        age_group,
+        audit=audit,
+        expect_package=expect_package,
+        channel_version_code=channel_version_code,
+    )
 
     if is_release_channel(channel) and not confirm_release and not validate_only:
         raise ConfirmationRequired(

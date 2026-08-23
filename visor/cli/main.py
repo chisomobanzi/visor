@@ -7,6 +7,7 @@ install/launch, capture, logs, performance.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,9 @@ from rich.table import Table
 
 from visor import adb
 from visor.adb.wrapper import VisorError
+from visor.publish import apk as apk_reader
+from visor.publish import audit as store_audit
+from visor.publish import builds as build_finder
 from visor.publish.creds import load as load_credentials
 from visor.publish.ovrtool import fetch as ovrtool_fetch
 from visor.publish.ovrtool import version as ovrtool_version
@@ -865,6 +869,152 @@ def fetch_tool():
     console.print(f"[green]Ready{suffix}.[/green]")
     # soft_wrap: a path broken across lines is a path you can't copy.
     console.print(f"  [dim]{path}[/dim]", soft_wrap=True)
+
+
+_AUDIT_STYLES = {
+    store_audit.BLOCKER: ("red", "BLOCK"),
+    store_audit.WARN: ("yellow", "WARN"),
+    store_audit.INFO: ("cyan", "INFO"),
+    store_audit.OK: ("green", "OK"),
+}
+
+
+@app.command()
+def audit(
+    apk: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, help="Path to the .apk to inspect"
+    ),
+    package: Optional[str] = typer.Option(
+        None, "--package", "-p", help="The package name this build is meant to have"
+    ),
+    channel_version_code: Optional[int] = typer.Option(
+        None,
+        "--channel-version-code",
+        help="Version code the target channel already serves, so a stale build is caught",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+):
+    """Check an APK against Meta's Store rules — no upload, no headset, no account.
+
+    Exits non-zero if anything would block the submission, so this can gate a
+    script: `visor audit build.apk && visor upload build.apk`.
+    """
+    try:
+        info = apk_reader.inspect(apk)
+    except apk_reader.ApkError as e:
+        console.print(f"[red]Could not read {Path(apk).name}: {e}[/red]")
+        raise typer.Exit(1)
+
+    report = store_audit.run(
+        info, expect_package=package, channel_version_code=channel_version_code
+    )
+
+    if as_json:
+        import json
+
+        console.print_json(json.dumps(report.summary()))
+        raise typer.Exit(0 if report.ready else 1)
+
+    table = Table(title=Path(apk).name)
+    table.add_column("")
+    table.add_column("Check", style="bold")
+    table.add_column("Finding")
+    for check in report.summary()["checks"]:
+        style, label = _AUDIT_STYLES.get(check["level"], ("dim", check["level"].upper()))
+        detail = check["detail"]
+        if check["hint"] and check["level"] != store_audit.OK:
+            detail += f"\n[dim]{check['hint']}[/dim]"
+        table.add_row(f"[{style}]{label}[/{style}]", check["title"], detail)
+    console.print(table)
+
+    if report.ready:
+        noted = len(report.warnings)
+        tail = f" — {noted} to note" if noted else ""
+        console.print(f"[green]READY[/green]{tail}")
+        return
+    plural = "" if len(report.blockers) == 1 else "s"
+    console.print(
+        f"[red]NOT READY — {len(report.blockers)} blocker{plural}.[/red] "
+        "[dim]Meta refuses these, most of them only after the whole upload.[/dim]"
+    )
+    raise typer.Exit(1)
+
+
+@app.command()
+def builds(
+    root: Path = typer.Argument(
+        Path("."), help="Project or folder to scan for .apk files"
+    ),
+    limit: int = typer.Option(
+        build_finder.DEFAULT_LIMIT, "--limit", "-n", help="How many builds to list"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+):
+    """List the APKs under a folder, newest first, with what tells them apart.
+
+    Pointed at an Unreal project it looks where the packager writes; pointed
+    anywhere else it just walks the tree.
+    """
+    roots = build_finder.default_roots(root)
+    found = build_finder.discover_all(roots, limit=limit)
+
+    if as_json:
+        import json
+
+        console.print_json(json.dumps([b.summary() for b in found]))
+        return
+
+    if not found:
+        console.print(f"No APKs under {root}.")
+        console.print(
+            "[dim]Package the project first, or point this at the folder "
+            "holding the build.[/dim]"
+        )
+        return
+
+    # One project can package more than one app, so the package name has to be
+    # visible — but as a column it does not fit an 80-column terminal beside
+    # everything else. When they all agree it is said once, above the table.
+    packages = {b.package for b in found if b.package}
+    mixed = len(packages) > 1
+
+    table = Table(title=f"Builds under {root}")
+    table.add_column("Build", style="bold")
+    if mixed:
+        table.add_column("Package")
+    table.add_column("Version")
+    table.add_column("Size", justify="right")
+    table.add_column("Signed by")
+    table.add_column("Built")
+    for build in found:
+        if build.error:
+            row = [build.path.name, "[red]unreadable[/red]", "", "", ""]
+            if mixed:
+                row.insert(1, "")
+            table.add_row(*row)
+            continue
+        key = build.signed_by or "[red]unsigned[/red]"
+        if build.debug_signed:
+            key = f"[red]{key} (debug)[/red]"
+        version = (
+            f"{build.version_name} ({build.version_code})"
+            if build.version_name
+            else "[dim]?[/dim]"
+        )
+        row = [
+            build.path.name,
+            version,
+            store_audit._human_bytes(build.size_bytes),
+            key,
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(build.modified)),
+        ]
+        if mixed:
+            row.insert(1, build.package or "[dim]?[/dim]")
+        table.add_row(*row)
+    if not mixed and packages:
+        console.print(f"[dim]All {next(iter(packages))}[/dim]")
+    console.print(table)
+    console.print("[dim]`visor audit <build>` checks one against the Store rules.[/dim]")
 
 
 @app.command()

@@ -259,6 +259,60 @@
   .crumbs { font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
   .crumbs a { color: var(--lens); text-decoration: none; cursor: pointer; }
   .crumbs a:hover { text-decoration: underline; }
+
+  /* ---------- publish runway ---------- */
+  .runway .step { margin-bottom: 26px; }
+  .runway h2 { display: flex; align-items: center; gap: 10px; }
+  .stepno {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; color: var(--muted);
+  }
+  .step.done .stepno { border-color: rgba(47,163,107,.5); color: var(--good); }
+  .pub-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .pub-title { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; }
+  .pub-note { color: var(--muted); font-size: 12px; margin: 6px 0 10px; max-width: 78ch; }
+  .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .pub-field {
+    display: flex; flex-direction: column; gap: 4px; font-family: var(--mono);
+    font-size: 9px; letter-spacing: .13em; color: var(--faint); text-transform: uppercase;
+  }
+  button.primary { border-color: rgba(107,203,223,.45); color: var(--lens); }
+  a.btn { text-decoration: none; display: inline-block; }
+  .pub-danger {
+    border: 1px solid rgba(230,103,103,.45); background: rgba(230,103,103,.06);
+    border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 13px;
+  }
+  .pub-danger label { display: flex; gap: 8px; align-items: flex-start; }
+  .check {
+    display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+    padding: 8px 0; border-bottom: 1px solid rgba(42,48,59,.5); align-items: baseline;
+  }
+  .check:last-child { border-bottom: 0; }
+  .check .lvl {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .12em; padding: 2px 7px;
+    border-radius: 999px; border: 1px solid var(--line); color: var(--muted); text-align: center;
+  }
+  .check .lvl.blocker { color: var(--bad); border-color: rgba(230,103,103,.5); }
+  .check .lvl.warn { color: var(--warn); border-color: rgba(201,133,0,.5); }
+  .check .lvl.ok { color: var(--good); border-color: rgba(47,163,107,.4); }
+  .check b { font-weight: 500; font-size: 13px; }
+  .check .detail { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+  .check .hint { grid-column: 2; color: var(--faint); font-size: 12px; }
+  .check.ok .hint { display: none; }
+  .pub-log {
+    font-family: var(--mono); font-size: 11px; line-height: 1.55; color: var(--muted);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; max-height: 320px; overflow: auto; white-space: pre-wrap;
+    margin-top: 10px;
+  }
+  tr.chosen td { background: rgba(107,203,223,.09); }
+  .tick { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid rgba(42,48,59,.5); }
+  .tick:last-child { border-bottom: 0; }
+  .tick input { margin-top: 3px; }
+  .tick b { font-weight: 500; font-size: 13px; display: block; }
+  .tick span { color: var(--muted); font-size: 12px; }
+  .tick.done b { color: var(--good); }
 </style>
 </head>
 <body>
@@ -271,6 +325,7 @@
     <a href="#logs">LOGS</a>
     <a href="#apps">APPS</a>
     <a href="#files">FILES</a>
+    <a href="#publish">PUBLISH</a>
     <div class="nav-foot">quest devtools<br>for linux</div>
   </nav>
 
@@ -416,6 +471,116 @@
         <tbody></tbody>
       </table></div>
     </section>
+    <section id="publish">
+      <div class="runway">
+        <div class="step" id="pub-step-setup">
+          <h2><span class="stepno">1</span> What publishing needs</h2>
+          <div class="grid cards2">
+            <div class="card">
+              <div class="pub-head">
+                <span class="pub-title">Meta's upload utility</span>
+                <span class="chip" id="pub-tool-chip"><span class="dot"></span><span id="pub-tool-state">CHECKING</span></span>
+              </div>
+              <p class="pub-note" id="pub-tool-note">ovr-platform-util is Meta's own tool and the only supported way to publish from Linux. Visor never downloads it without being asked.</p>
+              <div class="row"><button id="btn-fetch-tool">FETCH TOOL</button></div>
+            </div>
+            <div class="card">
+              <div class="pub-head">
+                <span class="pub-title">App credentials</span>
+                <span class="chip" id="pub-creds-chip"><span class="dot"></span><span id="pub-creds-state">CHECKING</span></span>
+              </div>
+              <p class="pub-note" id="pub-creds-note">From the Meta Horizon dashboard → your app → Development → API. Stored owner-only on this machine; the secret is never shown again and never leaves this process in readable form.</p>
+              <div class="row">
+                <input id="pub-app-id" placeholder="App ID" style="width:200px">
+                <input id="pub-app-secret" type="password" placeholder="App Secret" style="width:220px">
+                <button id="btn-save-creds">SAVE</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" id="pub-step-build">
+          <h2><span class="stepno">2</span> Which build</h2>
+          <div class="card">
+            <div class="row">
+              <input id="pub-root" placeholder="Project or folder to scan" style="flex:1;min-width:280px">
+              <button id="btn-scan-builds">SCAN</button>
+            </div>
+            <div id="pub-builds"><p class="empty">Point this at your Unreal project (or any folder) and scan.</p></div>
+          </div>
+        </div>
+
+        <div class="step" id="pub-step-audit">
+          <h2><span class="stepno">3</span> What Meta will say</h2>
+          <div class="card">
+            <div class="pub-head">
+              <span class="pub-title" id="pub-audit-target">No build selected</span>
+              <span class="chip" id="pub-audit-chip"><span class="dot"></span><span id="pub-audit-state">—</span></span>
+            </div>
+            <p class="pub-note">Read out of the APK itself. Every one of these is something Meta checks <em>after</em> the whole upload has gone over the wire.</p>
+            <div class="row">
+              <label class="pub-field">Channel's current version code
+                <input id="pub-chan-vc" type="number" min="0" placeholder="optional" style="width:120px">
+              </label>
+              <button id="btn-reaudit">RE-CHECK</button>
+            </div>
+            <p class="pub-note">Meta refuses a build whose version code does not exceed
+              the one that channel already serves — and it refuses it <em>after</em> the
+              upload. The number is on the Meta dashboard under
+              <b>Distribution → Release Channels</b>, next to the channel's current build.
+              Visor cannot read it for you: the only API for it wants an interactive Meta
+              account login, not the app secret.</p>
+            <div id="pub-checks"><p class="empty">Choose a build above.</p></div>
+          </div>
+        </div>
+
+        <div class="step" id="pub-step-send">
+          <h2><span class="stepno">4</span> Send it</h2>
+          <div class="card">
+            <div class="row">
+              <label class="pub-field">Channel
+                <select id="pub-channel"></select>
+              </label>
+              <label class="pub-field">Age group
+                <select id="pub-age"></select>
+              </label>
+              <label class="pub-field" style="flex:1;min-width:220px">Release notes
+                <input id="pub-notes" placeholder="What changed in this build">
+              </label>
+            </div>
+            <div id="pub-release-warn" class="pub-danger" hidden>
+              <label><input type="checkbox" id="pub-confirm-release"> I mean to publish to the <b>live store</b> — everyone who owns the app gets this build.</label>
+            </div>
+            <div class="row">
+              <button id="btn-validate">REHEARSE (VALIDATE ONLY)</button>
+              <button id="btn-upload" class="primary">UPLOAD</button>
+              <button id="btn-cancel-upload" class="danger" hidden>CANCEL</button>
+              <span class="pub-note" id="pub-send-note">A rehearsal sends the build to Meta's validator and stops. Nothing reaches a tester.</span>
+            </div>
+            <div id="pub-job" hidden>
+              <div class="pub-head">
+                <span class="pub-title" id="pub-job-title">Uploading</span>
+                <span class="chip" id="pub-job-chip"><span class="dot"></span><span id="pub-job-state">RUNNING</span></span>
+                <span class="pub-note" id="pub-job-elapsed"></span>
+              </div>
+              <pre class="pub-log" id="pub-log"></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" id="pub-step-after">
+          <h2><span class="stepno">5</span> The half that is on Meta's website</h2>
+          <div class="card">
+            <p class="pub-note">Uploading a build is about half of a submission. These are the parts only the Meta Horizon dashboard can do — ticked boxes are remembered on this machine.</p>
+            <div id="pub-checklist"></div>
+            <div class="row">
+              <a class="btn" href="https://developers.meta.com/horizon/manage" target="_blank" rel="noreferrer">OPEN META DASHBOARD</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 </div>
 <div id="toast" role="status"></div>
@@ -1185,6 +1350,292 @@ $("#up-file").addEventListener("change", async (ev) => {
   ev.target.value = "";
 });
 
+/* ---------------- publish runway ----------------
+   The order on screen is the order of the work: what the tool needs, which
+   build, what is wrong with it, send it, then what is left on Meta's site.
+   Nothing here guesses — an upload always names its channel, and the live
+   storefront needs its own tick. */
+const pub = { build: null, report: null, job: null, poll: null, seen: 0 };
+
+const bytes = (n) => {
+  if (!n && n !== 0) return "—";
+  const u = ["B", "KiB", "MiB", "GiB"]; let v = n, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${i ? v.toFixed(1) : v} ${u[i]}`;
+};
+const ago = (t) => {
+  const s = Date.now() / 1000 - t;
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 172800) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+function chip(el, state, text, note) {
+  el.className = "chip" + (state ? ` ${state}` : "");
+  el.querySelector("span:last-child").textContent = text;
+  if (note) el.title = note;
+}
+
+async function loadPublish() {
+  let s;
+  try { s = await api("/api/publish/status"); } catch (e) { return fail(e); }
+
+  chip($("#pub-tool-chip"), s.tool.found ? "on" : "warn", s.tool.found ? `v${s.tool.version || "?"}` : "MISSING");
+  $("#pub-tool-note").textContent = s.tool.found
+    ? `${s.tool.path} — Meta's own utility, and the only supported way to publish from Linux.`
+    : "Not installed. Visor never downloads it without being asked; fetching puts it in your cache directory only.";
+  $("#btn-fetch-tool").textContent = s.tool.found ? "RE-FETCH" : "FETCH TOOL";
+  $("#pub-step-setup").classList.toggle("done", s.tool.found && s.credentials.configured);
+
+  chip($("#pub-creds-chip"), s.credentials.configured ? "on" : "warn",
+       s.credentials.configured ? "SET" : "MISSING");
+  if (s.credentials.configured) {
+    $("#pub-creds-note").textContent =
+      `App ID ${s.credentials.app_id}, from the ${s.credentials.source}. The secret is stored owner-only at ${s.credentials.path} and is never shown again.`;
+    $("#pub-app-id").placeholder = s.credentials.app_id;
+  }
+
+  const chan = $("#pub-channel");
+  if (!chan.options.length) {
+    chan.innerHTML = s.channels.map((c) =>
+      `<option value="${esc(c)}">${esc(c === "store" ? "store (LIVE)" : c)}</option>`).join("");
+    $("#pub-age").innerHTML = ['<option value="">— not set —</option>']
+      .concat(s.age_groups.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`)).join("");
+  }
+  if (s.state.channel) chan.value = s.state.channel;
+  if (s.state.age_group) $("#pub-age").value = s.state.age_group;
+  if (s.state.root && !$("#pub-root").value) $("#pub-root").value = s.state.root;
+  onChannelChange();
+  drawChecklist(s.checklist);
+  if (s.state.root) scanBuilds(true);
+}
+
+function drawChecklist(items) {
+  $("#pub-checklist").innerHTML = items.map((i) => `
+    <label class="tick${i.done ? " done" : ""}">
+      <input type="checkbox" data-tick="${esc(i.id)}"${i.done ? " checked" : ""}>
+      <span><b>${esc(i.title)}</b><span>${esc(i.detail)}</span></span>
+    </label>`).join("");
+  $("#pub-checklist").querySelectorAll("input[data-tick]").forEach((box) => {
+    box.onchange = async () => {
+      try {
+        const r = await api("/api/publish/checklist", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: box.dataset.tick, done: box.checked }),
+        });
+        drawChecklist(r.checklist);
+      } catch (e) { fail(e); }
+    };
+  });
+}
+
+async function scanBuilds(quiet) {
+  const root = $("#pub-root").value.trim();
+  let r;
+  try {
+    r = await api(`/api/publish/builds?limit=25${root ? `&root=${encodeURIComponent(root)}` : ""}`);
+  } catch (e) { return quiet ? undefined : fail(e); }
+
+  if (!r.builds.length) {
+    $("#pub-builds").innerHTML = `<p class="empty">No APKs under ${esc(r.root || root || "that folder")}.</p>`;
+    return;
+  }
+  $("#pub-builds").innerHTML = `
+    <table><thead><tr>
+      <th>Build</th><th>Version</th><th class="num">Size</th><th>Signed by</th><th>Built</th><th></th>
+    </tr></thead><tbody>${r.builds.map((b, i) => `
+      <tr data-i="${i}">
+        <td title="${esc(b.path)}">${esc(b.name)}</td>
+        <td>${b.error ? "—" : `${esc(b.version_name || "?")} (${b.version_code})`}</td>
+        <td class="num">${bytes(b.size_bytes)}</td>
+        <td>${b.error ? `<span style="color:var(--warn)">unreadable</span>` :
+              b.debug_signed ? `<span style="color:var(--bad)">DEBUG KEY</span>` : esc(b.signed_by || "unsigned")}</td>
+        <td>${esc(ago(b.modified))}</td>
+        <td class="actions"><button data-choose="${i}">CHOOSE</button></td>
+      </tr>`).join("")}</tbody></table>`;
+  $("#pub-builds").querySelectorAll("button[data-choose]").forEach((b) => {
+    b.onclick = () => chooseBuild(r.builds[+b.dataset.choose]);
+  });
+  if (!pub.build) chooseBuild(r.builds[0]);
+  else markChosen();
+}
+
+function markChosen() {
+  $("#pub-builds").querySelectorAll("tr[data-i]").forEach((tr) => {
+    tr.classList.toggle("chosen", tr.querySelector("td").title === pub.build?.path);
+  });
+}
+
+async function chooseBuild(build) {
+  pub.build = build;
+  markChosen();
+  $("#pub-step-build").classList.add("done");
+  await runAudit();
+}
+
+async function runAudit() {
+  if (!pub.build) return;
+  $("#pub-audit-target").textContent = `${pub.build.name} · ${bytes(pub.build.size_bytes)}`;
+  const vc = $("#pub-chan-vc").value.trim();
+  let r;
+  try {
+    r = await api(`/api/publish/audit?path=${encodeURIComponent(pub.build.path)}` +
+                  (vc ? `&channel_version_code=${encodeURIComponent(vc)}` : ""));
+  } catch (e) {
+    pub.report = null;
+    chip($("#pub-audit-chip"), "warn", "UNREADABLE");
+    $("#pub-checks").innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+    return;
+  }
+  pub.report = r.report;
+  const { ready, blockers, warnings, checks } = r.report;
+  chip($("#pub-audit-chip"), ready ? "on" : "warn",
+       ready ? (warnings ? `READY · ${warnings} to note` : "READY") : `${blockers} BLOCKER${blockers === 1 ? "" : "S"}`);
+  $("#pub-step-audit").classList.toggle("done", ready);
+  $("#pub-checks").innerHTML = checks.map((c) => `
+    <div class="check ${esc(c.level)}">
+      <span class="lvl ${esc(c.level)}">${esc(c.level.toUpperCase())}</span>
+      <span><b>${esc(c.title)}</b> <span class="detail">${esc(c.detail)}</span></span>
+      ${c.hint ? `<span class="hint">${esc(c.hint)}</span>` : ""}
+    </div>`).join("");
+  refreshSendButtons();
+}
+
+function onChannelChange() {
+  const live = $("#pub-channel").value.toLowerCase() === "store";
+  $("#pub-release-warn").hidden = !live;
+  if (!live) $("#pub-confirm-release").checked = false;
+  refreshSendButtons();
+}
+
+function refreshSendButtons() {
+  const running = pub.job && pub.job.status === "running";
+  const blocked = pub.report && !pub.report.ready;
+  const live = $("#pub-channel").value.toLowerCase() === "store";
+  const unconfirmed = live && !$("#pub-confirm-release").checked;
+  $("#btn-upload").disabled = running || !pub.build || blocked || unconfirmed;
+  $("#btn-validate").disabled = running || !pub.build;
+  $("#btn-upload").title = blocked
+    ? "The audit found blockers Meta would reject this build for."
+    : unconfirmed ? "Tick the live-store confirmation first." : "";
+  $("#pub-send-note").textContent = blocked
+    ? "Fix the blockers above first — Meta rejects these after the whole upload, not before."
+    : unconfirmed
+      ? "A rehearsal needs no confirmation. Publishing to the live store does."
+      : "A rehearsal sends the build to Meta's validator and stops. Nothing reaches a tester.";
+}
+
+async function startUpload(validateOnly) {
+  if (!pub.build) return;
+  const channel = $("#pub-channel").value;
+  if (channel.toLowerCase() === "store" && !validateOnly && !$("#pub-confirm-release").checked) {
+    return toast("Tick the live-store confirmation first.", true);
+  }
+  const vc = $("#pub-chan-vc").value.trim();
+  let job;
+  try {
+    job = await api("/api/publish/upload", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: pub.build.path,
+        channel,
+        age_group: $("#pub-age").value || null,
+        notes: $("#pub-notes").value.trim() || null,
+        validate_only: !!validateOnly,
+        confirm_release: $("#pub-confirm-release").checked,
+        channel_version_code: vc ? Number(vc) : null,
+      }),
+    });
+  } catch (e) { return fail(e); }
+
+  pub.job = job; pub.seen = 0;
+  $("#pub-job").hidden = false;
+  $("#pub-log").textContent = "";
+  $("#pub-job-title").textContent = validateOnly
+    ? `Rehearsing ${pub.build.name} against Meta's validator`
+    : `Uploading ${pub.build.name} to ${channel}`;
+  $("#btn-cancel-upload").hidden = false;
+  refreshSendButtons();
+  clearInterval(pub.poll);
+  pub.poll = setInterval(pollJob, 1200);
+  pollJob();
+}
+
+async function pollJob() {
+  if (!pub.job) return;
+  let j;
+  try { j = await api(`/api/publish/upload/${pub.job.id}?since=${pub.seen}`); }
+  catch (e) { clearInterval(pub.poll); return fail(e); }
+
+  if (j.lines.length) {
+    pub.seen = j.total_lines;
+    const log = $("#pub-log");
+    const stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+    log.textContent += j.lines.join("\n") + "\n";
+    if (stuck) log.scrollTop = log.scrollHeight;
+  }
+  $("#pub-job-elapsed").textContent = clock(j.elapsed);
+  pub.job = { ...pub.job, status: j.status };
+
+  const done = j.status !== "running";
+  const good = j.status === "succeeded" || j.status === "validated";
+  chip($("#pub-job-chip"), done ? (good ? "on" : "warn") : "", j.status.toUpperCase());
+  if (!done) return;
+
+  clearInterval(pub.poll);
+  $("#btn-cancel-upload").hidden = true;
+  refreshSendButtons();
+  if (j.error) {
+    $("#pub-log").textContent += `\n${j.error}\n`;
+    $("#pub-log").scrollTop = $("#pub-log").scrollHeight;
+    toast(j.status === "refused" ? "Refused before uploading — see the log." : "Upload failed.", true);
+  } else if (j.notes?.length) {
+    $("#pub-log").textContent += `\n${j.notes.map((n) => `note: ${n}`).join("\n")}\n`;
+  }
+  if (good) {
+    toast(j.validate_only ? "Meta validated the build. Nothing was published." : "Build uploaded.");
+    if (!j.validate_only) $("#pub-step-send").classList.add("done");
+  }
+}
+
+$("#btn-fetch-tool").onclick = async (e) => {
+  e.target.disabled = true;
+  const was = e.target.textContent;
+  e.target.textContent = "FETCHING…";
+  try { const r = await api("/api/publish/tool/fetch", { method: "POST" }); toast(`ovr-platform-util ${r.version}`); }
+  catch (err) { fail(err); }
+  finally { e.target.disabled = false; e.target.textContent = was; loadPublish(); }
+};
+$("#btn-save-creds").onclick = async () => {
+  const app_id = $("#pub-app-id").value.trim(), app_secret = $("#pub-app-secret").value.trim();
+  if (!app_id || !app_secret) return toast("Both an App ID and an App Secret are needed.", true);
+  try {
+    await api("/api/publish/credentials", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ app_id, app_secret }),
+    });
+    $("#pub-app-secret").value = ""; $("#pub-app-id").value = "";
+    toast("Credentials saved, owner-only.");
+    loadPublish();
+  } catch (e) { fail(e); }
+};
+$("#btn-scan-builds").onclick = () => scanBuilds();
+$("#pub-root").addEventListener("keydown", (e) => { if (e.key === "Enter") scanBuilds(); });
+$("#btn-reaudit").onclick = () => runAudit();
+$("#pub-channel").onchange = onChannelChange;
+$("#pub-confirm-release").onchange = refreshSendButtons;
+$("#btn-validate").onclick = () => startUpload(true);
+$("#btn-upload").onclick = () => startUpload(false);
+$("#btn-cancel-upload").onclick = async () => {
+  if (!pub.job) return;
+  try { await api(`/api/publish/upload/${pub.job.id}/cancel`, { method: "POST" }); toast("Stopping the upload."); }
+  catch (e) { fail(e); }
+};
+
 /* lazy-load section data on first visit (including direct #hash loads) */
 const loaded = new Set();
 function lazyLoad() {
@@ -1194,6 +1645,7 @@ function lazyLoad() {
   if (id === "viewport") refreshShots();
   if (id === "files") loadFiles("/sdcard/");
   if (id === "performance") { populatePerfApps(); refreshSessionList(); }
+  if (id === "publish") loadPublish();
 }
 window.addEventListener("hashchange", lazyLoad);
 lazyLoad();

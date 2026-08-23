@@ -23,6 +23,9 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from visor import adb
 from visor.adb.wrapper import VisorError
+from visor.publish import apk as apk_reader
+from visor.publish import audit as store_audit
+from visor.publish import builds as build_finder
 from visor.publish.creds import load as load_credentials
 from visor.publish.upload import is_release_channel, preflight
 from visor.publish.upload import upload as publish_upload
@@ -552,6 +555,77 @@ def quest_tracking(device_id: Optional[str] = None) -> dict:
     tracking = _wrap(adb.get_tracking_status, serial)
     tracking["guardian"] = _wrap(adb.get_guardian_status, serial)
     return tracking
+
+
+@mcp.tool()
+def quest_audit_build(
+    apk: str,
+    expect_package: Optional[str] = None,
+    channel_version_code: Optional[int] = None,
+) -> dict:
+    """Check an APK against Meta Horizon Store rules by reading the file.
+
+    Reads only. No upload, no credentials, no headset, nothing irreversible —
+    safe to call whenever the question is "would Meta accept this build?".
+    Prefer it over quest_upload_build(validate_only=True), which needs an
+    account and sends the whole file to Meta.
+
+    Catches the failures that are expensive to learn late: a debug-signed or
+    unsigned build, a 32-bit-only build, a target SDK below Meta's floor, a
+    missing VR category, an oversized APK, a build left debuggable.
+
+    Args:
+        apk: Path to the .apk to inspect.
+        expect_package: The package name this build is supposed to have. A
+            mismatch is a blocker — without it the package is only reported.
+        channel_version_code: The version code the target channel already
+            serves. Meta refuses a build that does not exceed it; without this
+            the check cannot be made from the file alone.
+    """
+    try:
+        info = apk_reader.inspect(apk)
+    except (apk_reader.ApkError, OSError) as e:
+        raise QuestError(f"Could not read {Path(apk).name}: {e}") from None
+
+    report = store_audit.run(
+        info,
+        expect_package=expect_package,
+        channel_version_code=channel_version_code,
+    )
+    summary = report.summary()
+    return {
+        "ready": report.ready,
+        "blockers": [c.summary() for c in report.blockers],
+        "warnings": [c.summary() for c in report.warnings],
+        "checks": summary["checks"],
+        "build": build_finder.describe(apk).summary(),
+        "next_step": (
+            "Nothing in the file blocks the submission. quest_upload_build "
+            "sends it to a test channel; the live store is a human-only step."
+            if report.ready
+            else "Meta will refuse this build. Most of these can only be fixed "
+            "by another cook, not by re-uploading."
+        ),
+    }
+
+
+@mcp.tool()
+def quest_list_builds(root: str, limit: int = 25) -> dict:
+    """List the APKs under a folder, newest first, with what tells them apart.
+
+    Reads only. Pointed at an Unreal project it looks where the packager
+    writes; pointed anywhere else it walks the tree. Use it to find the build
+    to audit or upload rather than guessing a path.
+
+    Args:
+        root: Project or folder to scan.
+        limit: How many builds to return.
+    """
+    start = Path(root)
+    if not start.exists():
+        raise QuestError(f"No such folder: {root}")
+    found = build_finder.discover_all(build_finder.default_roots(start), limit=limit)
+    return {"root": str(start), "builds": [b.summary() for b in found]}
 
 
 @mcp.tool()

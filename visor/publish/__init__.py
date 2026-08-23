@@ -7,6 +7,13 @@ That is deliberate: the upload protocol is undocumented, so wrapping Meta's own
 tool is the only route that won't rot.
 """
 
+# Types and small helpers are re-exported; `audit.run` and `upload.upload`
+# deliberately are not, because binding those names here would shadow the
+# `visor.publish.audit` / `visor.publish.upload` submodules for anyone doing
+# `from visor.publish import audit`.
+from visor.publish.apk import ApkError, ApkInfo, inspect
+from visor.publish.audit import Check, Report
+from visor.publish.builds import Build, describe, discover, discover_all
 from visor.publish.creds import Credentials, MissingCredentialsError
 from visor.publish.ovrtool import OvrToolError, OvrToolNotFoundError
 from visor.publish.upload import (
@@ -17,12 +24,21 @@ from visor.publish.upload import (
 )
 
 __all__ = [
+    "ApkError",
+    "ApkInfo",
+    "Build",
+    "Check",
     "ConfirmationRequired",
     "Credentials",
     "MissingCredentialsError",
     "OvrToolError",
     "OvrToolNotFoundError",
     "PreflightError",
+    "Report",
     "UploadError",
     "UploadResult",
+    "describe",
+    "discover",
+    "discover_all",
+    "inspect",
 ]

@@ -11,6 +11,7 @@ a gate that waves through `Store` is not a gate.
 
 import pytest
 
+from tests.apkbuild import DEBUG_CERT, make_apk as build_apk, make_release_apk, v2_signed
 from visor.publish import upload
 from visor.publish.creds import Credentials
 
@@ -18,10 +19,14 @@ from visor.publish.creds import Credentials
 CREDS = Credentials(app_id="1234567890", app_secret="s3cr3t")
 
 
-def make_apk(path, size=1024):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"PK\x03\x04" + b"\0" * (size - 4))
-    return path
+def make_apk(path, size=0, **kwargs):
+    """A real, signed, store-shaped APK.
+
+    Preflight reads the file now, so a stub of four magic bytes would exercise
+    the reader's error path instead of the checks. `size` pads it; the size
+    tests shrink the limit rather than growing the file.
+    """
+    return make_release_apk(path, padding=size, **kwargs)
 
 
 class TestReleaseChannel:
@@ -89,13 +94,89 @@ class TestPreflightRejects:
         upload.preflight(apk, channel="ALPHA", age_group="teens_and_adults")
 
 
+class TestPreflightReadsTheApk:
+    """The expensive failures are all legible in the file before the upload.
+
+    Meta rejects a debug-signed or 32-bit build *after* the whole thing has
+    gone over the wire, which is the worst moment to learn it. Preflight opens
+    the APK instead.
+    """
+
+    def test_debug_signed_build_is_refused(self, tmp_path):
+        apk = build_apk(
+            tmp_path / "debug.apk", signing_block=v2_signed(cert=DEBUG_CERT)
+        )
+        with pytest.raises(upload.PreflightError, match="(?i)debug"):
+            upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES")
+
+    def test_unsigned_build_is_refused(self, tmp_path):
+        apk = build_apk(tmp_path / "unsigned.apk")
+        with pytest.raises(upload.PreflightError, match="(?i)sign"):
+            upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES")
+
+    def test_missing_arm64_is_refused(self, tmp_path):
+        apk = build_apk(
+            tmp_path / "armv7.apk", abis=("armeabi-v7a",), signing_block=v2_signed()
+        )
+        with pytest.raises(upload.PreflightError, match="(?i)arm64"):
+            upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES")
+
+    def test_the_refusal_names_every_blocker_not_just_the_first(self, tmp_path):
+        apk = build_apk(tmp_path / "bad.apk", abis=("armeabi-v7a",))
+        with pytest.raises(upload.PreflightError) as e:
+            upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES")
+        message = str(e.value).lower()
+        assert "arm64" in message and "sign" in message
+
+    def test_a_file_the_reader_cannot_parse_is_a_note_not_a_refusal(self, tmp_path):
+        # Preflight's job is to stop bad uploads, not to stop uploads it cannot
+        # judge. An APK this reader chokes on may still be perfectly good.
+        apk = tmp_path / "odd.apk"
+        apk.write_bytes(b"PK\x03\x04" + b"\0" * 1020)
+        notes = upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES")
+        assert any("could not read" in n.lower() for n in notes), notes
+
+    def test_the_audit_can_be_waived(self, tmp_path):
+        # Meta's rules move; a check of ours going stale must never be the thing
+        # that stops a release.
+        apk = build_apk(tmp_path / "debug.apk", signing_block=v2_signed(DEBUG_CERT))
+        notes = upload.preflight(
+            apk, channel="ALPHA", age_group="MIXED_AGES", audit=False
+        )
+        assert notes == []
+
+    def test_a_version_code_the_channel_already_has_is_refused(self, tmp_path):
+        apk = make_apk(tmp_path / "a.apk")
+        with pytest.raises(upload.PreflightError, match="(?i)version code"):
+            upload.preflight(
+                apk,
+                channel="ALPHA",
+                age_group="MIXED_AGES",
+                channel_version_code=99,
+            )
+
+    def test_the_wrong_app_is_refused(self, tmp_path):
+        apk = make_apk(tmp_path / "a.apk")
+        with pytest.raises(upload.PreflightError, match="(?i)package"):
+            upload.preflight(
+                apk,
+                channel="ALPHA",
+                age_group="MIXED_AGES",
+                expect_package="com.someone.else",
+            )
+
+
 class TestPreflightWarns:
     """Soft problems come back as notes rather than exceptions — they are
     things the user may well have meant."""
 
-    def test_clean_upload_has_no_notes(self, tmp_path):
+    def test_a_clean_upload_only_notes_what_the_store_will_ask_about(self, tmp_path):
+        # The fixture manifest is a real Quest build, so it declares RECORD_AUDIO
+        # and Meta will want a Data Use Checkup for it. Nothing else is worth
+        # saying about a build that is otherwise ready.
         apk = make_apk(tmp_path / "a.apk")
-        assert upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES") == []
+        notes = upload.preflight(apk, channel="ALPHA", age_group="MIXED_AGES")
+        assert all("data use" in n.lower() for n in notes), notes
 
     def test_missing_age_group_warns_about_draft(self, tmp_path):
         apk = make_apk(tmp_path / "a.apk")

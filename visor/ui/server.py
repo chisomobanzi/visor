@@ -24,8 +24,13 @@ from fastapi.responses import (
 
 from visor import adb
 from visor.adb.wrapper import VisorError
+from visor.ui.publish_routes import router as publish_router
 
 app = FastAPI(title="visor", docs_url=None, redoc_url=None)
+
+# Publishing is the one part of the dashboard that reaches Meta rather than
+# the headset, so it lives in its own module.
+app.include_router(publish_router)
 
 _STATIC = Path(__file__).parent / "static"
 

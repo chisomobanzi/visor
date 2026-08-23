@@ -76,6 +76,11 @@ visor bench com.my.game           # cold-start benchmark
 visor trace -t 10                 # perfetto trace -> ui.perfetto.dev
 
 visor push ./file /sdcard/  ·  visor pull /sdcard/f ./  ·  visor ls /sdcard/
+
+# Publishing (see "Publishing to the Meta Horizon Store" below)
+visor builds ~/my-project         # find the APKs the packager wrote
+visor audit build.apk             # check it against Meta's Store rules, offline
+visor upload build.apk -c ALPHA   # upload to a release channel
 ```
 
 Multiple devices? Add `--device <serial>`.
@@ -112,8 +117,107 @@ Then ask your assistant things like:
 - *"Install this build, launch it, and watch the logs for exceptions while I test"*
 - *"Why did my app crash? Pull the crash log and explain the stack trace"*
 - *"Monitor performance for 60 seconds while I play, then tell me if I'm thermal throttling"*
+- *"Is my latest build ready for the Meta Store?"* — `quest_audit_build` reads the APK; it needs no account and uploads nothing
 
-Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_app_memory`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_perf_session`, `quest_perf_diff`, `quest_launch_benchmark`, `quest_trace`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`.
+Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_app_memory`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_perf_session`, `quest_perf_diff`, `quest_launch_benchmark`, `quest_trace`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`, `quest_list_builds`, `quest_audit_build`, `quest_upload_build`.
+
+## Publishing to the Meta Horizon Store
+
+Everything else Visor does talks to a headset. This is the one part that talks
+to Meta, and it wraps `ovr-platform-util` — Meta's own upload utility, the same
+one Meta Quest Developer Hub drives internally. On Linux, where MQDH does not
+exist, that makes this the only route to a release channel.
+
+`ovr-platform-util` is Meta's, not Visor's, so it can't be redistributed here.
+It is fetched on request and kept alongside Visor's other user data:
+
+```bash
+visor fetch-tool
+```
+
+Credentials come from your app's Meta Horizon dashboard (API → App ID and App
+Secret). Put them in the environment for a one-off, or in
+`~/.config/visor/credentials` (written `0600`, `KEY=value` lines) to keep them:
+
+```bash
+OCULUS_APP_ID=… OCULUS_APP_SECRET=… visor upload build.apk --channel ALPHA
+```
+
+The secret is redacted from every command line, log line and error message
+Visor produces. If you ever see it in output, that's a bug worth reporting.
+
+### Read the build before you spend the upload
+
+An 800 MB upload that Meta refuses on arrival costs twenty minutes and another
+cook. `visor audit` answers the same question from the file, in under a second,
+with no account and no headset:
+
+```bash
+visor builds ~/my-project          # what did the packager actually produce?
+visor audit build.apk              # would Meta take this one?
+visor audit build.apk --json       # same, for a script
+```
+
+It reads the APK directly — the Android binary manifest, the v2/v3 signing
+block, the certificate subject — and checks what Meta checks: APK size against
+the 1 GiB cap, `arm64-v8a` present (Quest is 64-bit only), target SDK against
+Meta's floor, landscape orientation, the `com.oculus.intent.category.VR`
+category, `com.oculus.supportedDevices`, `debuggable` off, and — the one that
+catches most people — whether the build is signed with the Android debug key
+rather than your release keystore.
+
+Two things the file alone cannot settle, so pass them in and they become checks
+rather than notes:
+
+```bash
+visor audit build.apk --package com.my.game --channel-version-code 7
+```
+
+`--channel-version-code` is what that channel already serves; Meta refuses a
+build that does not exceed it, and refuses it *after* the upload. Find the
+number on the Meta dashboard under **Distribution → Release Channels**. Visor
+does not read it for you on purpose: Meta's only API for it
+(`ovr-platform-util get-release-channel-data`) wants an interactive account
+login — email, password, 2FA — rather than the app secret, and Visor will not
+stand between you and a password prompt.
+
+`visor audit` exits non-zero on any blocker, so
+`visor audit build.apk && visor upload build.apk -c ALPHA` is safe to chain.
+
+### Upload
+
+```bash
+visor upload build.apk --channel ALPHA --notes "fixed the hand ray"
+visor upload build.apk -c ALPHA --dry-run     # Meta validates it and stops
+```
+
+`--dry-run` sends the build to Meta's validator without publishing it — the
+rehearsal to do first. Channels are `ALPHA`, `BETA`, `RC` and `store`; the
+first three are test channels, and they **start empty**: invite testers by
+email in the dashboard or nobody can install what you uploaded.
+
+`store` is the live storefront — everyone who owns the app gets that build. It
+needs `--yes`, and the MCP tool refuses to publish there whatever it is asked, so
+an assistant cannot publish to the public storefront by guessing (it can still
+rehearse against it with `validate_only`).
+
+Uploading also runs the audit first and refuses on blockers. If you believe a
+check is wrong about your build, the upload is not the place to argue with it —
+but nothing stops you: `visor upload` reports what it found before it spends
+the bandwidth.
+
+### The dashboard walks the whole thing
+
+```bash
+visor ui        # PUBLISH in the sidebar
+```
+
+Five steps: get the tool and store the credentials, scan for builds and pick
+one, see every check with its blockers and warnings, send it (with a live log
+you can cancel), and a persistent checklist of the half that only exists on
+Meta's website — store listing, assets, age rating, privacy policy, Data Use
+Checkup, IAP, review notes. Uploading a build is roughly half of a submission;
+the checklist is there so the other half is not something you have to remember.
 
 ## Web dashboard
 
@@ -122,7 +226,7 @@ visor ui        # opens http://127.0.0.1:7700 in your browser
 visor app       # same dashboard in a desktop window of its own
 ```
 
-Overview (battery/thermal lens gauges, tracking status), viewport with **real-time live video** (H.264 off the device via `screenrecord`, transcoded to an MJPEG stream — requires ffmpeg), a **shot gallery** where every CAPTURE is saved as a PNG under `~/.visor/shots` and copied to your clipboard (capturing mid-stream grabs the on-screen frame without interrupting the video), performance charts sampled every 2.5s, filterable log viewer with crash reports, app management (install APK by upload, launch/stop/clear/uninstall), and a device file browser. Localhost-only by design.
+Overview (battery/thermal lens gauges, tracking status), viewport with **real-time live video** (H.264 off the device via `screenrecord`, transcoded to an MJPEG stream — requires ffmpeg), a **shot gallery** where every CAPTURE is saved as a PNG under `~/.visor/shots` and copied to your clipboard (capturing mid-stream grabs the on-screen frame without interrupting the video), performance charts sampled every 2.5s, filterable log viewer with crash reports, app management (install APK by upload, launch/stop/clear/uninstall), a device file browser, and a **publish runway** that takes a build from "which APK is this?" to a Meta release channel. Localhost-only by design.
 
 On Linux, `visor install-desktop` adds an app-menu launcher and icon so Visor opens like any other desktop app (`visor install-desktop --uninstall` removes it).
 
