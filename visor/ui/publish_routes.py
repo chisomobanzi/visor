@@ -33,6 +33,7 @@ from visor.publish import apk as apk_reader
 from visor.publish import audit as store_audit
 from visor.publish import builds as build_finder
 from visor.publish import creds as creds_module
+from visor.publish import ledger as ledger_module
 from visor.publish import ovrtool, upload as uploader
 from visor.utils.host import config_home
 
@@ -48,6 +49,11 @@ _STATE_LOCK = threading.Lock()
 def state_path() -> Path:
     """Where the runway remembers itself between sessions."""
     return config_home() / "visor" / "publish-ui.json"
+
+
+def ledger_path() -> Path:
+    """Where completed uploads are remembered — see visor.publish.ledger."""
+    return config_home() / "visor" / "publish-ledger.json"
 
 
 def _load_state() -> dict:
@@ -161,6 +167,12 @@ class Job:
         return {
             "id": self.id,
             "status": self.status,
+            "phase": uploader.phase_of(self.lines) if self.status == "running" else None,
+            "hint": (
+                uploader.diagnose_failure("\n".join(self.lines) + "\n" + (self.error or ""))
+                if self.status == "failed"
+                else None
+            ),
             "channel": self.channel,
             "apk": self.apk,
             "validate_only": self.validate_only,
@@ -198,6 +210,9 @@ def _run_job(job: Job, **kwargs) -> None:
         result = uploader.upload(on_line=job.lines.append, **kwargs)
         job.notes = list(result.preflight_notes)
         job.command = result.command
+        # Record BEFORE the status flip: the browser polls status, and the
+        # history it refreshes on completion must already contain this run.
+        _record_outcome(job, validated=result.validated_only)
         job.status = "validated" if result.validated_only else "succeeded"
     except (uploader.PreflightError, uploader.ConfirmationRequired) as error:
         # Nothing ran and nothing was sent, which is a different thing from a
@@ -451,6 +466,60 @@ def recent_uploads(limit: int = 10):
     return [
         {k: v for k, v in job.summary().items() if k != "lines"} for job in jobs[:limit]
     ]
+
+
+def _record_outcome(job: Job, *, validated: bool) -> None:
+    """Remember a completed conversation with Meta in the on-disk ledger.
+
+    Best-effort by design: an unreadable APK or a full disk must never turn a
+    finished upload into a reported failure — the bytes are already with Meta.
+    """
+    package = version_code = version_name = size = None
+    try:
+        info = apk_reader.inspect(Path(job.apk))
+        package, version_code = info.package, info.version_code
+        version_name, size = info.version_name, info.size_bytes
+    except Exception:
+        pass
+    try:
+        ledger_module.record(
+            ledger_path(),
+            ledger_module.Entry(
+                package=package,
+                version_code=version_code,
+                version_name=version_name,
+                channel=job.channel,
+                apk_name=Path(job.apk).name,
+                apk_path=job.apk,
+                size_bytes=size,
+                status="validated" if validated else "uploaded",
+                build_url=ledger_module.parse_build_url("\n".join(job.lines)),
+            ),
+        )
+    except Exception:
+        pass
+
+
+@router.get("/history")
+def history(package: Optional[str] = None, channel: Optional[str] = None, limit: int = 50):
+    """What this machine has sent to Meta, newest first, plus the highest
+    version code it has uploaded per (package, channel) — the prefill that
+    replaces remembering. Advisory: other machines and humans also upload."""
+    entries = ledger_module.load(ledger_path())
+    latest = None
+    if package and channel:
+        latest = ledger_module.latest_version_code(entries, package, channel)
+    shown = entries
+    if package:
+        shown = [e for e in shown if e.package == package]
+    if channel:
+        shown = [e for e in shown if (e.channel or "").lower() == channel.lower()]
+    shown = sorted(shown, key=lambda e: e.timestamp, reverse=True)[:limit]
+    from dataclasses import asdict
+    return {
+        "entries": [asdict(e) for e in shown],
+        "latest_uploaded_version_code": latest,
+    }
 
 
 def _checklist_view(state: dict) -> list[dict]:

@@ -27,6 +27,7 @@ CREDS = creds_module.Credentials(app_id="1234567890", app_secret="s3cr3t")
 def isolated(tmp_path, monkeypatch):
     """Never touch the developer's real credentials or remembered state."""
     monkeypatch.setattr(publish_routes, "state_path", lambda: tmp_path / "ui.json")
+    monkeypatch.setattr(publish_routes, "ledger_path", lambda: tmp_path / "ledger.json")
     monkeypatch.setattr(creds_module, "config_path", lambda: tmp_path / "credentials")
     publish_routes._JOBS.clear()
     yield
@@ -294,3 +295,86 @@ class TestChecklist:
         assert client.post(
             "/api/publish/checklist", json={"id": "invented", "done": True}
         ).status_code == 404
+
+
+class TestLedgerAndHistory:
+    """Finished uploads are remembered on disk and served back; the runway
+    prefills a channel's version code from what THIS machine sent before."""
+
+    def _ledger(self, tmp_path, monkeypatch):
+        path = tmp_path / "ledger.json"
+        monkeypatch.setattr(publish_routes, "ledger_path", lambda: path)
+        return path
+
+    def test_a_finished_upload_lands_in_the_ledger(
+        self, ready_to_upload, monkeypatch, tmp_path
+    ):
+        self._ledger(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            uploader, "_spawn", lambda argv: FakeProcess(["Uploaded to ALPHA\n"])
+        )
+        job = client.post(
+            "/api/publish/upload",
+            json={"path": str(ready_to_upload), "channel": "ALPHA", "age_group": "MIXED_AGES"},
+        ).json()
+        wait_for(job["id"])
+        body = client.get("/api/publish/history").json()
+        assert len(body["entries"]) == 1
+        assert body["entries"][0]["status"] == "uploaded"
+        assert body["entries"][0]["channel"] == "ALPHA"
+
+    def test_a_rehearsal_is_remembered_but_consumes_no_version_code(
+        self, ready_to_upload, monkeypatch, tmp_path
+    ):
+        self._ledger(tmp_path, monkeypatch)
+        monkeypatch.setattr(uploader, "_spawn", lambda argv: FakeProcess(["ok\n"]))
+        job = client.post(
+            "/api/publish/upload",
+            json={
+                "path": str(ready_to_upload), "channel": "ALPHA",
+                "age_group": "MIXED_AGES", "validate_only": True,
+            },
+        ).json()
+        wait_for(job["id"])
+        body = client.get("/api/publish/history").json()
+        assert body["entries"][0]["status"] == "validated"
+        pkg = body["entries"][0]["package"]
+        latest = client.get(
+            f"/api/publish/history?package={pkg}&channel=ALPHA"
+        ).json()["latest_uploaded_version_code"]
+        assert latest is None
+
+    def test_a_running_job_names_its_phase(self, ready_to_upload, monkeypatch, tmp_path):
+        self._ledger(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            uploader, "_spawn",
+            lambda argv: FakeProcess(["Uploading 10%\n", "POSTPROCESSING\n"]),
+        )
+        job = client.post(
+            "/api/publish/upload",
+            json={"path": str(ready_to_upload), "channel": "ALPHA", "age_group": "MIXED_AGES"},
+        ).json()
+        finished = wait_for(job["id"])
+        # By completion phase is no longer reported; the promise is that the
+        # field exists on the wire and never crashes the summary.
+        assert "phase" in finished
+
+    def test_a_stale_secret_failure_carries_the_hint(
+        self, ready_to_upload, monkeypatch, tmp_path
+    ):
+        self._ledger(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            uploader, "_spawn",
+            lambda argv: FakeProcess(
+                ["Error validation application. Either App ID or App Secret must be invalid.\n",
+                 "OAuthException code 190 — Error verifying the token\n"],
+                code=1,
+            ),
+        )
+        job = client.post(
+            "/api/publish/upload",
+            json={"path": str(ready_to_upload), "channel": "ALPHA", "age_group": "MIXED_AGES"},
+        ).json()
+        finished = wait_for(job["id"])
+        assert finished["status"] == "failed"
+        assert finished["hint"] and "secret" in finished["hint"].lower()

@@ -329,3 +329,45 @@ def upload(
 
 def _stream(process) -> Iterable[str]:
     return process.stdout or ()
+
+
+# ---------------------------------------------------------------------------
+# Reading the utility's mind.
+#
+# ovr-platform-util is chatty but unstructured. Two moments matter enough to
+# classify: the long silence after the bytes have left (Meta postprocessing —
+# which reads exactly like a hang unless named), and the credential failure
+# whose headline blames the App ID when the Graph error underneath says the
+# SECRET went stale (that misdirection cost a real upload on 2026-08-23).
+# ---------------------------------------------------------------------------
+
+_POSTPROCESS_MARKERS = ("POSTPRO", "post-process", "postprocess", "Processing build")
+_UPLOAD_MARKERS = ("Uploading", "upload progress", "%", "retried")
+_DONE_MARKERS = ("Successfully", "Uploaded to")
+
+
+def phase_of(lines: "list[str]") -> str:
+    """Which stage the utility is in, judged from its most recent output."""
+    for line in reversed(lines):
+        if any(m in line for m in _DONE_MARKERS):
+            return "finishing"
+        if any(m in line for m in _POSTPROCESS_MARKERS):
+            return "postprocessing"
+        if any(m in line for m in _UPLOAD_MARKERS):
+            return "uploading"
+    return "starting"
+
+
+def diagnose_failure(output: str) -> Optional[str]:
+    """A targeted hint for the failures whose error text points the wrong way."""
+    if ("OAuthException" in output and "190" in output) or (
+        "App ID or App Secret must be invalid" in output
+    ):
+        return (
+            "This headline usually means the App SECRET went stale, not the App "
+            "ID — re-copy the secret from developers.meta.com/horizon/manage → "
+            "your app → Development → API, and leave the App ID alone. (The "
+            "Graph error underneath — code 190, token verification — is the "
+            "honest half of the message.)"
+        )
+    return None

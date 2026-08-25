@@ -565,6 +565,13 @@
               </div>
               <pre class="pub-log" id="pub-log"></pre>
             </div>
+            <div class="card" id="pub-history-card">
+              <div class="pub-head">
+                <span class="pub-title">What has shipped from this machine</span>
+                <span class="pub-note">Visor's own ledger &mdash; advisory; other machines and the dashboard also count.</span>
+              </div>
+              <div id="pub-history"><p class="empty">Nothing recorded yet. Finished uploads and rehearsals land here.</p></div>
+            </div>
           </div>
         </div>
 
@@ -1412,6 +1419,7 @@ async function loadPublish() {
   onChannelChange();
   drawChecklist(s.checklist);
   if (s.state.root) scanBuilds(true);
+  loadHistory();
 }
 
 function drawChecklist(items) {
@@ -1474,6 +1482,7 @@ async function chooseBuild(build) {
   pub.build = build;
   markChosen();
   $("#pub-step-build").classList.add("done");
+  await prefillVersionCode();
   await runAudit();
 }
 
@@ -1506,6 +1515,7 @@ async function runAudit() {
 }
 
 function onChannelChange() {
+  prefillVersionCode();
   const live = $("#pub-channel").value.toLowerCase() === "store";
   $("#pub-release-warn").hidden = !live;
   if (!live) $("#pub-confirm-release").checked = false;
@@ -1583,14 +1593,24 @@ async function pollJob() {
 
   const done = j.status !== "running";
   const good = j.status === "succeeded" || j.status === "validated";
-  chip($("#pub-job-chip"), done ? (good ? "on" : "warn") : "", j.status.toUpperCase());
-  if (!done) return;
+  const label = !done && j.phase === "postprocessing" ? "META POSTPROCESSING"
+    : !done && j.phase ? j.phase.toUpperCase() : j.status.toUpperCase();
+  chip($("#pub-job-chip"), done ? (good ? "on" : "warn") : "", label);
+  if (!done) {
+    if (j.phase === "postprocessing") {
+      $("#pub-job-title").textContent = "Meta is postprocessing "
+        + (pub.build ? pub.build.name : "the build")
+        + " \u2014 the file has left this machine; this quiet stretch is normal and can take many minutes.";
+    }
+    return;
+  }
 
   clearInterval(pub.poll);
   $("#btn-cancel-upload").hidden = true;
   refreshSendButtons();
   if (j.error) {
     $("#pub-log").textContent += `\n${j.error}\n`;
+    if (j.hint) $("#pub-log").textContent += `\nhint: ${j.hint}\n`;
     $("#pub-log").scrollTop = $("#pub-log").scrollHeight;
     toast(j.status === "refused" ? "Refused before uploading — see the log." : "Upload failed.", true);
   } else if (j.notes?.length) {
@@ -1599,7 +1619,42 @@ async function pollJob() {
   if (good) {
     toast(j.validate_only ? "Meta validated the build. Nothing was published." : "Build uploaded.");
     if (!j.validate_only) $("#pub-step-send").classList.add("done");
+    loadHistory();
   }
+}
+
+async function loadHistory() {
+  let r;
+  try { r = await api("/api/publish/history"); } catch { return; }
+  if (!r.entries.length) return;
+  const row = (e) => "<tr>"
+    + `<td>${esc(ago(e.timestamp))}</td>`
+    + `<td title="${esc(e.apk_path)}">${esc(e.package || e.apk_name)}</td>`
+    + `<td>${e.version_code == null ? "\u2014" : esc((e.version_name || "") + " (" + e.version_code + ")")}</td>`
+    + `<td>${esc(e.channel === "store" ? "store (LIVE)" : e.channel)}</td>`
+    + `<td>${e.status === "uploaded" ? "<b>uploaded</b>" : "rehearsed"}</td>`
+    + `<td>${e.build_url ? `<a href="${esc(e.build_url)}" target="_blank" rel="noreferrer">DASHBOARD \u2192</a>` : ""}</td>`
+    + "</tr>";
+  $("#pub-history").innerHTML = "<table><thead><tr>"
+    + "<th>When</th><th>App</th><th>Version</th><th>Channel</th><th>Status</th><th></th>"
+    + "</tr></thead><tbody>" + r.entries.map(row).join("") + "</tbody></table>";
+}
+
+async function prefillVersionCode() {
+  /* The ledger knows the highest version code THIS machine uploaded for the
+     chosen app+channel. Prefill only an EMPTY field: a typed value is the
+     developer knowing better than the ledger, which is the intended order. */
+  const field = $("#pub-chan-vc");
+  if (!pub.build?.package || field.value.trim()) return;
+  try {
+    const r = await api("/api/publish/history?package=" + encodeURIComponent(pub.build.package)
+      + "&channel=" + encodeURIComponent($("#pub-channel").value));
+    if (r.latest_uploaded_version_code != null) {
+      field.value = r.latest_uploaded_version_code;
+      field.title = "From Visor\u2019s ledger: the highest version code this machine has uploaded to this channel. Edit freely.";
+      runAudit();
+    }
+  } catch {}
 }
 
 $("#btn-fetch-tool").onclick = async (e) => {
