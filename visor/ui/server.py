@@ -25,12 +25,15 @@ from fastapi.responses import (
 from visor import adb
 from visor.adb.wrapper import VisorError
 from visor.ui.publish_routes import router as publish_router
+from visor.ui.sim_routes import router as sim_router
 
 app = FastAPI(title="visor", docs_url=None, redoc_url=None)
 
 # Publishing is the one part of the dashboard that reaches Meta rather than
 # the headset, so it lives in its own module.
 app.include_router(publish_router)
+# The virtual headset (visor.xr) has its own routes too.
+app.include_router(sim_router)
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -62,6 +65,17 @@ def _call(fn, *args, **kwargs):
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (_STATIC / "index.html").read_text(encoding="utf-8")
+
+
+_STATIC_TYPES = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png"}
+
+
+@app.get("/static/{name}")
+def static_file(name: str):
+    path = (_STATIC / name).resolve()
+    if path.parent != _STATIC.resolve() or path.suffix not in _STATIC_TYPES or not path.is_file():
+        raise HTTPException(404, "not found")
+    return FileResponse(path, media_type=_STATIC_TYPES[path.suffix], headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/devices")

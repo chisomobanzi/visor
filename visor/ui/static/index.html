@@ -314,6 +314,7 @@
   .tick span { color: var(--muted); font-size: 12px; }
   .tick.done b { color: var(--good); }
 </style>
+<link rel="stylesheet" href="/static/sim.css">
 </head>
 <body>
 <div class="shell">
@@ -326,6 +327,9 @@
     <a href="#apps">APPS</a>
     <a href="#files">FILES</a>
     <a href="#publish">PUBLISH</a>
+    <div class="nav-group">virtual headset</div>
+    <a href="#sim">SIMULATOR<span class="new">NEW</span></a>
+    <a href="#playtests">PLAYTESTS</a>
     <div class="nav-foot">quest devtools<br>for linux</div>
   </nav>
 
@@ -586,6 +590,158 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- ================= SIMULATOR ================= -->
+    <section id="sim">
+      <div class="capbar sim-bar">
+        <div class="sim-tabs" id="sim-tabs" role="tablist" aria-label="Apps in the virtual headset"></div>
+        <button id="sim-new" class="primary">+ LAUNCH</button>
+        <span class="note" id="sim-hint">drag to look · click to press · shift-click left hand · W A S D walk · space trigger</span>
+      </div>
+
+      <div class="card sim-launch" id="sim-launch" hidden>
+        <div class="sim-launch-grid">
+          <label class="fld wide"><span>App</span>
+            <input id="sl-target" list="sl-suggest" placeholder="a .uproject, a Linux build, any OpenXR executable — or demo" autocomplete="off">
+            <datalist id="sl-suggest"></datalist></label>
+          <label class="fld"><span>Map (Unreal)</span><input id="sl-map" placeholder="optional, e.g. /Game/Maps/Start"></label>
+          <label class="fld"><span>Headset</span>
+            <select id="sl-headset">
+              <option value="quest3" selected>Meta Quest 3</option><option value="quest3s">Meta Quest 3S</option>
+              <option value="quest2">Meta Quest 2</option><option value="questpro">Meta Quest Pro</option>
+            </select></label>
+          <label class="fld"><span>Eye buffer</span>
+            <select id="sl-scale"><option value="1" selected>full</option><option value="0.75">¾</option><option value="0.5">½ · light</option></select></label>
+          <div class="fld toggles">
+            <label title="Freeze at the first frame; step it forward yourself"><input type="checkbox" id="sl-paused"> start paused</label>
+            <label title="Eyes at 1.2 m"><input type="checkbox" id="sl-seated"> seated</label>
+            <label title="Let the app hear this computer's microphone"><input type="checkbox" id="sl-mic"> microphone</label>
+          </div>
+        </div>
+        <div class="sim-launch-foot">
+          <span class="note" id="sl-progress">Runs headless in a simulated headset — no plugin, no code changes.</span>
+          <button id="sl-cancel">CANCEL</button>
+          <button id="sl-go" class="primary">LAUNCH</button>
+        </div>
+      </div>
+
+      <div class="card sim-empty" id="sim-empty">
+        <div class="goggles" aria-hidden="true"><i></i></div>
+        <div>
+          <h3>Nothing in the virtual headset yet</h3>
+          <p>Launch any OpenXR app and it runs here, headless, in a simulated Quest 3: you see what it renders and you
+             hold the head and both controllers. Pause it, step it frame by frame, or hand it to an AI playtester.</p>
+          <div class="actions">
+            <button class="primary" id="sim-try-demo">LAUNCH THE DEMO</button>
+            <button id="sim-open-launch">LAUNCH AN APP…</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sim-stage" id="sim-stage" hidden>
+        <div>
+          <div class="simview" id="simview" tabindex="0" aria-label="Virtual headset view: drag to look around, click to press what's under the cursor">
+            <img id="sim-img" alt="">
+            <div class="waiting" id="sim-waiting">connecting…</div>
+            <div class="hud tl"><span class="chip" id="sim-chip"><span class="dot"></span><span id="sim-state">—</span></span>
+              <span class="hud-num" id="sim-frame"></span></div>
+            <div class="hud tr"><span class="pausebadge" id="sim-paused" hidden>PAUSED</span></div>
+            <div class="hud bl"><span class="hud-num" id="sim-fps"></span></div>
+          </div>
+          <div class="transport">
+            <button id="sim-pp" class="primary" title="Pause / resume (P)">❚❚ PAUSE</button>
+            <button data-step="1" title="Advance one frame (.)">+1 FRAME</button>
+            <button data-step="36" title="Advance half a second">+½ s</button>
+            <button data-step="72" title="Advance one second (&gt;)">+1 s</button>
+            <span class="sep"></span>
+            <button id="sim-shot" title="Open a full-size screenshot">SHOT</button>
+            <button id="sim-rec" title="Record video and a replay script of every input">● REC</button>
+            <span class="spacer"></span>
+            <span class="note" id="sim-rec-note"></span>
+          </div>
+        </div>
+        <aside class="sim-side">
+          <div class="card hands" aria-label="Controllers">
+            <div class="hand" data-hand="left">
+              <div class="hand-h">LEFT</div>
+              <div class="stickpad" data-hand="left" title="Drag: thumbstick"><i></i></div>
+              <div class="btnrow"><button data-b="x">X</button><button data-b="y">Y</button><button data-b="menu" title="Menu">≡</button></div>
+              <div class="btnrow wide"><button data-b="trigger">TRIGGER</button><button data-b="grip">GRIP</button></div>
+            </div>
+            <div class="hand" data-hand="right">
+              <div class="hand-h">RIGHT</div>
+              <div class="stickpad" data-hand="right" title="Drag: thumbstick"><i></i></div>
+              <div class="btnrow"><button data-b="a">A</button><button data-b="b">B</button><button data-b="stick" title="Thumbstick click">◉</button></div>
+              <div class="btnrow wide"><button data-b="trigger">TRIGGER</button><button data-b="grip">GRIP</button></div>
+            </div>
+          </div>
+          <div class="card system">
+            <h3 class="mini"><span>System</span></h3>
+            <div class="sysrow">
+              <button data-ev="focus_lost" title="Open the Meta menu: the app loses focus and should pause">META MENU</button>
+              <button data-ev="recenter" title="Long-press recenter: LOCAL space jumps to where you're looking">RECENTER</button>
+              <button id="sim-stop" class="danger" title="Ask the app to quit">STOP APP</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="mini"><span>Session</span><span id="sim-app-name"></span></h3>
+            <dl class="kv tight" id="sim-kv"></dl>
+            <canvas id="sim-spark" width="560" height="88" aria-label="frames per second, last minute"></canvas>
+          </div>
+          <div class="card">
+            <h3 class="mini"><span>Felt &amp; seen</span></h3>
+            <ol class="feed" id="sim-feed"><li class="empty">Haptic pulses and session changes show up here.</li></ol>
+          </div>
+          <div class="card">
+            <h3 class="mini"><span>App controls</span><span id="sim-act-count"></span></h3>
+            <div class="actions-list" id="sim-actions"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= PLAYTESTS ================= -->
+    <section id="playtests">
+      <div class="pt-grid">
+        <div class="card pt-new">
+          <h2>New playtest</h2>
+          <label class="fld"><span>App</span><input id="pt-target" list="sl-suggest" placeholder="a .uproject, a Linux build, or demo" autocomplete="off"></label>
+          <div class="fld"><span>Who plays</span><div class="personas" id="pt-personas" role="radiogroup" aria-label="Persona"></div></div>
+          <label class="fld"><span>Goal</span><textarea id="pt-goal" rows="3"
+            placeholder="Start the experience as a new player would and get as far as you can, noting everything that gets in your way."></textarea></label>
+          <div class="pt-row">
+            <label class="fld"><span>Played by</span>
+              <select id="pt-brain"><option value="claude">Claude Opus 5.5 — sees, decides, reports</option>
+                <option value="monkey">Monkey — seeded random input, free</option></select></label>
+            <label class="fld"><span>Actions</span><input id="pt-steps" type="number" value="30" min="5" max="200"></label>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center">
+            <button id="pt-go" class="primary">START PLAYTEST</button>
+            <span class="pt-cost" id="pt-cost"></span>
+          </div>
+        </div>
+        <div class="card pt-live" id="pt-live" hidden>
+          <div class="pt-live-head"><b id="pt-live-title"></b><span class="chip on" id="pt-live-chip"><span class="dot"></span><span id="pt-live-state">STARTING</span></span></div>
+          <img id="pt-live-img" alt="">
+          <div class="thought" id="pt-live-thought"></div>
+          <div class="progress"><i id="pt-live-bar"></i></div>
+          <ol class="feed" id="pt-live-feed"></ol>
+        </div>
+        <div class="card" id="pt-fleet">
+          <h2>Fleet</h2>
+          <p class="note" style="color:var(--muted); margin-bottom:12px">Many isolated copies at once — each its own runtime. Monkey playtests are free; findings merge across copies.</p>
+          <div class="fleet-form">
+            <label class="fld"><span>App</span><input id="fl-target" list="sl-suggest" placeholder="demo"></label>
+            <label class="fld"><span>Copies</span><input id="fl-count" type="number" value="8" min="1" max="64"></label>
+            <label class="fld"><span>Mode</span><select id="fl-mode"><option value="soak">soak 30 s</option><option value="playtest">monkey playtest</option></select></label>
+            <button id="fl-go" class="primary">RUN FLEET</button>
+          </div>
+          <div class="note" id="fl-note" style="margin-top:10px; font-family:var(--mono); font-size:11.5px; color:var(--muted)"></div>
+        </div>
+      </div>
+      <h2>Reports</h2>
+      <div class="reports" id="pt-reports"><div class="empty">No playtests yet.</div></div>
     </section>
 
   </main>
@@ -1705,5 +1861,6 @@ function lazyLoad() {
 window.addEventListener("hashchange", lazyLoad);
 lazyLoad();
 </script>
+<script src="/static/sim.js"></script>
 </body>
 </html>
