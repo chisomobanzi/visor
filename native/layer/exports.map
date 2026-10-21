@@ -1,0 +1,8 @@
+/* Export exactly one symbol. Everything else binds inside the layer: libstdc++
+ * gives std:: templates default visibility, and an engine that replaces
+ * operator new (Unreal does) would otherwise end up allocating our vectors
+ * through its own copies of those templates while we free them with glibc. */
+{
+  global: xrNegotiateLoaderApiLayerInterface;
+  local: *;
+};
