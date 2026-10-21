@@ -9,8 +9,6 @@ reaches the store, so the list is offered newest-first and says which is which.
 import os
 import time
 
-import pytest
-
 from tests.apkbuild import make_release_apk
 from visor.publish import builds
 

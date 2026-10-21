@@ -12,8 +12,6 @@ answer, so warnings never stop anything. The audit is also deliberately generic:
 it knows about Quest, not about any particular app.
 """
 
-import pytest
-
 from visor.publish import audit
 from visor.publish.apk import ApkInfo, Signature
 from pathlib import Path

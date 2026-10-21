@@ -21,10 +21,8 @@ import pytest
 
 from tests.apkbuild import (
     DEBUG_CERT,
-    MANIFEST,
     V2_BLOCK_ID as _V2_BLOCK_ID,
     V3_BLOCK_ID as _V3_BLOCK_ID,
-    lp as _lp,
     make_apk,
     signing_block as _signing_block,
     v2_value as _v2_value,
