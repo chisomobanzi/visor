@@ -7,6 +7,7 @@ we don't want to hand anyone.
 """
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -122,7 +123,8 @@ class TestFetch:
         )
         path = ovrtool.fetch(platform="linux")
         assert path.read_bytes() == b"ELF-ish"
-        assert path.stat().st_mode & stat.S_IXUSR
+        if sys.platform != "win32":  # a Windows host has no execute bit to set
+            assert path.stat().st_mode & stat.S_IXUSR
 
     def test_downloads_from_the_platform_url(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))

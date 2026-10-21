@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +77,10 @@ def _parse(text: str) -> dict[str, str]:
 
 
 def _warn_if_readable(path: Path) -> None:
+    if sys.platform == "win32":
+        # Windows guards files with ACLs, which st_mode doesn't show: it
+        # reports 0666 for any writable file, so this would cry wolf every time.
+        return
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
     except OSError:  # pragma: no cover - unreadable file fails later anyway

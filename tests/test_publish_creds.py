@@ -7,6 +7,7 @@ never be the thing that writes it to a log, a traceback, or a tool result.
 """
 
 import stat
+import sys
 
 import pytest
 
@@ -14,6 +15,8 @@ from visor.publish import creds
 
 
 ENV = {"OCULUS_APP_ID": "1234567890", "OCULUS_APP_SECRET": "s3cr3t-from-env"}
+
+posix_modes = pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX permission bits")
 
 
 def write_credentials(path, body, mode=0o600):
@@ -77,6 +80,7 @@ class TestLoadFromFile:
         got = creds.load(env={}, path=path)
         assert (got.app_id, got.app_secret) == ("999", "abc")
 
+    @posix_modes
     def test_warns_when_world_readable(self, tmp_path):
         path = write_credentials(
             tmp_path / "credentials",
@@ -163,6 +167,7 @@ class TestRedact:
 
 
 class TestFilePermissions:
+    @posix_modes
     def test_save_writes_owner_only(self, tmp_path):
         path = tmp_path / "visor" / "credentials"
         creds.save(creds.Credentials("111", "shhh"), path=path)
