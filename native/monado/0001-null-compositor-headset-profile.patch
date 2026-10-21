@@ -1,0 +1,763 @@
+diff --git a/src/xrt/compositor/null/CMakeLists.txt b/src/xrt/compositor/null/CMakeLists.txt
+index 978270b..803cd57 100644
+--- a/src/xrt/compositor/null/CMakeLists.txt
++++ b/src/xrt/compositor/null/CMakeLists.txt
+@@ -1,7 +1,7 @@
+ # Copyright 2019-2022, Collabora, Ltd.
+ # SPDX-License-Identifier: BSL-1.0
+ 
+-add_library(comp_null STATIC null_compositor.c null_compositor.h)
++add_library(comp_null STATIC null_compositor.c null_compositor.h null_visor_capture.c null_visor_capture.h)
+ target_link_libraries(
+ 	comp_null
+ 	PUBLIC xrt-interfaces
+diff --git a/src/xrt/compositor/null/null_compositor.c b/src/xrt/compositor/null/null_compositor.c
+index d1732ac..262a383 100644
+--- a/src/xrt/compositor/null/null_compositor.c
++++ b/src/xrt/compositor/null/null_compositor.c
+@@ -32,16 +32,20 @@
+ #include "xrt/xrt_device.h"
+ 
+ 
++#include <math.h>
+ #include <stdint.h>
++#include <stdlib.h>
+ #include <stdio.h>
+ 
+-static const uint64_t RECOMMENDED_VIEW_WIDTH = 320;
+-static const uint64_t RECOMMENDED_VIEW_HEIGHT = 240;
+-
+-static const uint64_t MAX_VIEW_WIDTH = 1920;
+-static const uint64_t MAX_VIEW_HEIGHT = 1080;
++static const uint64_t MAX_VIEW_WIDTH = 4096;
++static const uint64_t MAX_VIEW_HEIGHT = 4096;
+ 
+ DEBUG_GET_ONCE_LOG_OPTION(log, "XRT_COMPOSITOR_LOG", U_LOGGING_INFO)
++// Lets a headless session stand in for a specific headset: eye-buffer size and
++// the refresh rates it offers (comma separated, first one is used at start).
++DEBUG_GET_ONCE_NUM_OPTION(view_width, "XRT_COMPOSITOR_NULL_VIEW_WIDTH", 320)
++DEBUG_GET_ONCE_NUM_OPTION(view_height, "XRT_COMPOSITOR_NULL_VIEW_HEIGHT", 240)
++DEBUG_GET_ONCE_OPTION(refresh_rates, "XRT_COMPOSITOR_NULL_REFRESH_RATES", "20")
+ 
+ 
+ /*
+@@ -294,13 +298,18 @@ compositor_init_sys_info(struct null_compositor *c, struct xrt_device *xdev)
+ 	(void)sys_info->client_vk_deviceUUID;
+ 	(void)sys_info->client_d3d_deviceLUID;
+ 	(void)sys_info->client_d3d_deviceLUID_valid;
++	uint32_t rec_w = (uint32_t)debug_get_num_option_view_width();
++	uint32_t rec_h = (uint32_t)debug_get_num_option_view_height();
++	uint32_t max_w = rec_w > MAX_VIEW_WIDTH ? rec_w : MAX_VIEW_WIDTH;
++	uint32_t max_h = rec_h > MAX_VIEW_HEIGHT ? rec_h : MAX_VIEW_HEIGHT;
++
+ 	// clang-format off
+ 	for (uint32_t i = 0; i < view_count; ++i) {
+-		sys_info->view_configs[0].views[i].recommended.width_pixels  = RECOMMENDED_VIEW_WIDTH;
+-		sys_info->view_configs[0].views[i].recommended.height_pixels = RECOMMENDED_VIEW_HEIGHT;
++		sys_info->view_configs[0].views[i].recommended.width_pixels  = rec_w;
++		sys_info->view_configs[0].views[i].recommended.height_pixels = rec_h;
+ 		sys_info->view_configs[0].views[i].recommended.sample_count  = 1;
+-		sys_info->view_configs[0].views[i].max.width_pixels  = MAX_VIEW_WIDTH;
+-		sys_info->view_configs[0].views[i].max.height_pixels = MAX_VIEW_HEIGHT;
++		sys_info->view_configs[0].views[i].max.width_pixels  = max_w;
++		sys_info->view_configs[0].views[i].max.height_pixels = max_h;
+ 		sys_info->view_configs[0].views[i].max.sample_count  = 1;
+ 	}
+ 	// clang-format on
+@@ -318,9 +327,26 @@ compositor_init_sys_info(struct null_compositor *c, struct xrt_device *xdev)
+ 	}
+ 	sys_info->supported_blend_mode_count = (uint8_t)xdev->hmd->blend_mode_count;
+ 
+-	// Refresh rates.
+-	sys_info->refresh_rate_count = 1;
+-	sys_info->refresh_rates_hz[0] = (float)(1. / time_ns_to_s(c->settings.frame_interval_ns));
++	// Refresh rates, the first one listed is the one we start at.
++	sys_info->refresh_rate_count = 0;
++	const char *rates = debug_get_option_refresh_rates();
++	while (rates != NULL && *rates != '\0' && sys_info->refresh_rate_count < XRT_MAX_SUPPORTED_REFRESH_RATES) {
++		char *end = NULL;
++		double hz = strtod(rates, &end);
++		if (end == rates) {
++			break;
++		}
++		if (hz > 0.0) {
++			sys_info->refresh_rates_hz[sys_info->refresh_rate_count++] = (float)hz;
++		}
++		rates = *end == ',' ? end + 1 : end;
++	}
++	if (sys_info->refresh_rate_count == 0) {
++		sys_info->refresh_rates_hz[sys_info->refresh_rate_count++] = 20.0f;
++	}
++	// Pacing was set up before us, so the first predict switches it over.
++	c->settings.refresh_rate_hz = sys_info->refresh_rates_hz[0];
++	c->settings.pending_frame_interval_ns = (uint64_t)(U_TIME_1S_IN_NS / (double)c->settings.refresh_rate_hz);
+ 
+ 	return true;
+ }
+@@ -374,6 +400,16 @@ null_compositor_predict_frame(struct xrt_compositor *xc,
+ 	NULL_TRACE(c, "PREDICT_FRAME");
+ 
+ 	int64_t now_ns = os_monotonic_get_ns();
++	uint64_t pending_ns = c->settings.pending_frame_interval_ns;
++	if (pending_ns != 0 && pending_ns != c->settings.frame_interval_ns) {
++		struct u_pacing_compositor *upc = NULL;
++		if (u_pc_fake_create(pending_ns, now_ns, &upc) == XRT_SUCCESS) {
++			u_pc_destroy(&c->upc);
++			c->upc = upc;
++			c->settings.frame_interval_ns = pending_ns;
++			NULL_INFO(c, "Display refresh rate now %.1f Hz", c->settings.refresh_rate_hz);
++		}
++	}
+ 	int64_t null_desired_present_time_ns = 0;
+ 	int64_t null_present_slop_ns = 0;
+ 	int64_t null_min_display_period_ns = 0;
+@@ -482,6 +518,10 @@ null_compositor_layer_commit(struct xrt_compositor *xc, xrt_graphics_sync_handle
+ 	// can just unref the sync handle. Otherwise please use it.
+ 	u_graphics_sync_unref(&sync_handle);
+ 
++	// Hand the frame to Visor if it asked for one (the multi compositor has
++	// already waited for the client's GPU work).
++	null_visor_capture_frame(&c->capture, &c->base.layer_accum, frame_id);
++
+ 	/*
+ 	 * Time keeping needed to keep the pacer happy.
+ 	 */
+@@ -520,6 +560,7 @@ null_compositor_destroy(struct xrt_compositor *xc)
+ 
+ 	// Must be destroyed before Vulkan.
+ 	comp_swapchain_shared_destroy(&c->base.cscs, vk);
++	null_visor_capture_fini(&c->capture);
+ 
+ 	if (vk->device != VK_NULL_HANDLE) {
+ 		vk->vkDestroyDevice(vk->device, NULL);
+@@ -545,13 +586,25 @@ null_compositor_get_display_refresh_rate(struct xrt_compositor *xc, float *out_d
+ {
+ 	struct null_compositor *c = null_compositor(xc);
+ 
+-	*out_display_refresh_rate_hz = c->sys_info.refresh_rates_hz[0];
++	*out_display_refresh_rate_hz = c->settings.refresh_rate_hz;
+ 	return XRT_SUCCESS;
+ }
+ 
+ static xrt_result_t
+ null_compositor_request_display_refresh_rate(struct xrt_compositor *xc, float display_refresh_rate_hz)
+ {
++	struct null_compositor *c = null_compositor(xc);
++
++	// Zero means "runtime's choice", we go back to the first one listed.
++	float hz = display_refresh_rate_hz > 0.0f ? display_refresh_rate_hz : c->sys_info.refresh_rates_hz[0];
++	for (uint32_t i = 0; i < c->sys_info.refresh_rate_count; i++) {
++		if (fabsf(c->sys_info.refresh_rates_hz[i] - hz) < 0.5f) {
++			c->settings.refresh_rate_hz = c->sys_info.refresh_rates_hz[i];
++			c->settings.pending_frame_interval_ns = (uint64_t)(U_TIME_1S_IN_NS / (double)c->settings.refresh_rate_hz);
++			return XRT_SUCCESS;
++		}
++	}
++	// The state tracker only passes on rates we listed, nothing to do.
+ 	return XRT_SUCCESS;
+ }
+ 
+@@ -580,7 +633,7 @@ null_compositor_create_system(struct xrt_device *xdev, struct xrt_system_composi
+ 	c->settings.log_level = debug_get_log_option_log();
+ 	c->frame.waited.id = -1;
+ 	c->frame.rendering.id = -1;
+-	c->settings.frame_interval_ns = U_TIME_1S_IN_NS / 20; // 20 FPS
++	c->settings.frame_interval_ns = U_TIME_1S_IN_NS / 20; // Until sys info is read.
+ 	c->xdev = xdev;
+ 
+ 	NULL_DEBUG(c, "Doing init %p", (void *)c);
+@@ -614,6 +667,8 @@ null_compositor_create_system(struct xrt_device *xdev, struct xrt_system_composi
+ 		return XRT_ERROR_VULKAN;
+ 	}
+ 
++	null_visor_capture_init(&c->capture, get_vk(c));
++
+ 
+ 	NULL_DEBUG(c, "Done %p", (void *)c);
+ 
+diff --git a/src/xrt/compositor/null/null_compositor.h b/src/xrt/compositor/null/null_compositor.h
+index 2f686d9..86f8a05 100644
+--- a/src/xrt/compositor/null/null_compositor.h
++++ b/src/xrt/compositor/null/null_compositor.h
+@@ -20,6 +20,7 @@
+ #include "util/u_pacing.h"
+ 
+ #include "util/comp_base.h"
++#include "null_visor_capture.h"
+ 
+ #include <stdint.h>
+ 
+@@ -93,11 +94,20 @@ struct null_compositor
+ 
+ 		//! Frame interval that we are using.
+ 		uint64_t frame_interval_ns;
++
++		//! Refresh rate matching frame_interval_ns (or about to).
++		float refresh_rate_hz;
++
++		//! Set by a refresh rate request, applied at the next predict.
++		uint64_t pending_frame_interval_ns;
+ 	} settings;
+ 
+ 	// Kept here for convenience.
+ 	struct xrt_system_compositor_info sys_info;
+ 
++	//! Copies committed frames out to Visor (VISOR_XR_SHM), off by default.
++	struct null_visor_capture capture;
++
+ 	//! @todo Insert your own required members here
+ 
+ 	struct
+diff --git a/src/xrt/compositor/null/null_visor_capture.c b/src/xrt/compositor/null/null_visor_capture.c
+new file mode 100644
+index 0000000..953c8d0
+--- /dev/null
++++ b/src/xrt/compositor/null/null_visor_capture.c
+@@ -0,0 +1,427 @@
++// Copyright 2026, Visor contributors.
++// SPDX-License-Identifier: BSL-1.0
++/*!
++ * @file
++ * @brief  Frame capture for the null compositor, see null_visor_capture.h.
++ *
++ * Shared memory layout (little endian):
++ *   0     char[8]  magic "VISORXR1"
++ *   8     u32      version (1)
++ *   12    u32      slot_count
++ *   16    u64      slot_bytes
++ *   24    u64      latest_seq        (0 = nothing yet)
++ *   32    u32      latest_slot
++ *   36    u32      writer            (2 = runtime)
++ *   40    u64      request_seq       written by readers: bump to ask for a frame
++ *   48    f64      fps               written by readers: continuous rate, 0 = on request
++ *   56    u32      eye_width         written by readers: pixels per eye
++ *   60    u32      eyes              written by readers: 1 = left, 3 = both
++ *   256   u64      served_request    request_seq value the latest capture answered
++ *   64 + 64*i      slot: u64 seq, u32 width, u32 height, u32 stride, u32 eyes,
++ *                  i64 frame, i64 display_time_ns, i64 capture_ns, u32 format, u32 reserved
++ *   4096 + i*slot_bytes   RGBA8 rows, top-down, sRGB encoded
++ *
++ * @ingroup comp_null
++ */
++
++#include "null_visor_capture.h"
++
++#include "os/os_time.h"
++#include "util/u_logging.h"
++#include "util/comp_swapchain.h"
++
++#include <fcntl.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <unistd.h>
++
++#define VC_SLOTS 3
++#define VC_HEADER 4096
++#define VC_MAX_W 4096
++#define VC_MAX_H 2400
++
++static void
++put_u32(uint8_t *b, size_t off, uint32_t v)
++{
++	memcpy(b + off, &v, sizeof(v));
++}
++
++static void
++put_u64(uint8_t *b, size_t off, uint64_t v)
++{
++	memcpy(b + off, &v, sizeof(v));
++}
++
++static void
++put_i64(uint8_t *b, size_t off, int64_t v)
++{
++	memcpy(b + off, &v, sizeof(v));
++}
++
++static uint64_t
++get_u64(const uint8_t *b, size_t off)
++{
++	return __atomic_load_n((const uint64_t *)(b + off), __ATOMIC_ACQUIRE);
++}
++
++static bool
++srgb_like(VkFormat f)
++{
++	switch (f) {
++	case VK_FORMAT_R8G8B8A8_SRGB:
++	case VK_FORMAT_B8G8R8A8_SRGB:
++	case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
++	case VK_FORMAT_R16G16B16A16_SFLOAT:
++	case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return true;
++	default: return false;
++	}
++}
++
++void
++null_visor_capture_init(struct null_visor_capture *vc, struct vk_bundle *vk)
++{
++	memset(vc, 0, sizeof(*vc));
++	vc->fd = -1;
++	const char *name = getenv("VISOR_XR_SHM");
++	if (name == NULL || name[0] == '\0') {
++		return;
++	}
++	snprintf(vc->name, sizeof(vc->name), "%s", name);
++	vc->vk = vk;
++	vc->slot_count = VC_SLOTS;
++	vc->slot_bytes = (size_t)VC_MAX_W * VC_MAX_H * 4;
++	vc->shm_size = VC_HEADER + vc->slot_bytes * VC_SLOTS;
++
++	vc->fd = shm_open(vc->name, O_CREAT | O_RDWR | O_TRUNC, 0600);
++	if (vc->fd < 0 || ftruncate(vc->fd, (off_t)vc->shm_size) != 0) {
++		U_LOG_E("visor capture: can't create shm %s", vc->name);
++		null_visor_capture_fini(vc);
++		return;
++	}
++	void *p = mmap(NULL, vc->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, vc->fd, 0);
++	if (p == MAP_FAILED) {
++		U_LOG_E("visor capture: can't map shm %s", vc->name);
++		null_visor_capture_fini(vc);
++		return;
++	}
++	vc->shm = p;
++	memset(vc->shm, 0, VC_HEADER);
++	memcpy(vc->shm, "VISORXR1", 8);
++	put_u32(vc->shm, 8, 1);
++	put_u32(vc->shm, 12, VC_SLOTS);
++	put_u64(vc->shm, 16, vc->slot_bytes);
++	put_u32(vc->shm, 36, 2);
++	double fps = getenv("VISOR_XR_CAPTURE_FPS") ? atof(getenv("VISOR_XR_CAPTURE_FPS")) : 0.0;
++	memcpy(vc->shm + 48, &fps, sizeof(fps));
++	uint32_t w = getenv("VISOR_XR_CAPTURE_WIDTH") ? (uint32_t)atoi(getenv("VISOR_XR_CAPTURE_WIDTH")) : 960;
++	put_u32(vc->shm, 56, w);
++	const char *eyes = getenv("VISOR_XR_CAPTURE_EYES");
++	put_u32(vc->shm, 60, (eyes && strcmp(eyes, "both") == 0) ? 3 : 1);
++
++	if (vk_cmd_pool_init(vk, &vc->pool, VK_COMMAND_POOL_CREATE_TRANSIENT_BIT) != VK_SUCCESS) {
++		U_LOG_E("visor capture: no command pool");
++		null_visor_capture_fini(vc);
++		return;
++	}
++	vc->enabled = true;
++	U_LOG_I("visor capture: frames available in shm %s", vc->name);
++}
++
++static void
++destroy_staging(struct null_visor_capture *vc)
++{
++	struct vk_bundle *vk = vc->vk;
++	if (vc->mapped) {
++		vk->vkUnmapMemory(vk->device, vc->buffer_mem);
++		vc->mapped = NULL;
++	}
++	if (vc->buffer) {
++		vk->vkDestroyBuffer(vk->device, vc->buffer, NULL);
++		vc->buffer = VK_NULL_HANDLE;
++	}
++	if (vc->buffer_mem) {
++		vk->vkFreeMemory(vk->device, vc->buffer_mem, NULL);
++		vc->buffer_mem = VK_NULL_HANDLE;
++	}
++	if (vc->image) {
++		vk->vkDestroyImage(vk->device, vc->image, NULL);
++		vc->image = VK_NULL_HANDLE;
++	}
++	if (vc->image_mem) {
++		vk->vkFreeMemory(vk->device, vc->image_mem, NULL);
++		vc->image_mem = VK_NULL_HANDLE;
++	}
++	vc->width = vc->height = 0;
++}
++
++static bool
++ensure_staging(struct null_visor_capture *vc, uint32_t w, uint32_t h, VkFormat fmt)
++{
++	if (vc->image && vc->width == w && vc->height == h && vc->format == fmt) {
++		return true;
++	}
++	destroy_staging(vc);
++	struct vk_bundle *vk = vc->vk;
++	VkExtent2D extent = {w, h};
++	VkResult ret = vk_create_image_simple(vk, extent, fmt,
++	                                      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
++	                                      &vc->image_mem, &vc->image);
++	if (ret != VK_SUCCESS) {
++		return false;
++	}
++	VkMemoryPropertyFlags props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
++	                              VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++	if (!vk_buffer_init(vk, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, props, &vc->buffer,
++	                    &vc->buffer_mem) &&
++	    !vk_buffer_init(vk, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
++	                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &vc->buffer,
++	                    &vc->buffer_mem)) {
++		destroy_staging(vc);
++		return false;
++	}
++	if (vk->vkMapMemory(vk->device, vc->buffer_mem, 0, VK_WHOLE_SIZE, 0, &vc->mapped) != VK_SUCCESS) {
++		destroy_staging(vc);
++		return false;
++	}
++	vc->width = w;
++	vc->height = h;
++	vc->format = fmt;
++	return true;
++}
++
++static VkImageMemoryBarrier
++barrier(VkImage image,
++        VkImageLayout from,
++        VkImageLayout to,
++        VkAccessFlags src,
++        VkAccessFlags dst,
++        uint32_t src_family,
++        uint32_t dst_family)
++{
++	VkImageMemoryBarrier b = {
++	    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++	    .srcAccessMask = src,
++	    .dstAccessMask = dst,
++	    .oldLayout = from,
++	    .newLayout = to,
++	    .srcQueueFamilyIndex = src_family,
++	    .dstQueueFamilyIndex = dst_family,
++	    .image = image,
++	    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS},
++	};
++	return b;
++}
++
++void
++null_visor_capture_frame(struct null_visor_capture *vc, struct comp_layer_accum *accum, int64_t frame_id)
++{
++	if (!vc->enabled) {
++		return;
++	}
++	uint8_t *h = vc->shm;
++	uint64_t request = get_u64(h, 40);
++	double fps;
++	memcpy(&fps, h + 48, sizeof(fps));
++	uint32_t eye_w;
++	memcpy(&eye_w, h + 56, sizeof(eye_w));
++	uint32_t eyes;
++	memcpy(&eyes, h + 60, sizeof(eyes));
++
++	int64_t now = os_monotonic_get_ns();
++	bool due = request > vc->served_request ||
++	           (fps > 0.0 && (double)(now - vc->last_capture_ns) >= 1e9 / fps - 2e6);
++	if (!due) {
++		return;
++	}
++
++	// The scene is the first projection layer.
++	struct comp_layer *layer = NULL;
++	for (uint32_t i = 0; i < accum->layer_count; i++) {
++		enum xrt_layer_type t = accum->layers[i].data.type;
++		if (t == XRT_LAYER_PROJECTION || t == XRT_LAYER_PROJECTION_DEPTH) {
++			layer = &accum->layers[i];
++			break;
++		}
++	}
++	if (layer == NULL) {
++		return;
++	}
++	const struct xrt_layer_projection_view_data *views = layer->data.type == XRT_LAYER_PROJECTION
++	                                                         ? layer->data.proj.v
++	                                                         : layer->data.depth.v;
++	uint32_t view_count = layer->data.view_count < 2 ? layer->data.view_count : 2;
++	bool both = eyes == 3 && view_count >= 2;
++	if (eye_w < 64) {
++		eye_w = 64;
++	}
++	if (eye_w > VC_MAX_W / 2) {
++		eye_w = VC_MAX_W / 2;
++	}
++
++	struct comp_swapchain *sc0 = comp_swapchain(comp_layer_get_swapchain(layer, 0));
++	if (sc0 == NULL) {
++		return;
++	}
++	const struct xrt_rect *r0 = &views[0].sub.rect;
++	if (r0->extent.w <= 0 || r0->extent.h <= 0) {
++		return;
++	}
++	if (eye_w > (uint32_t)r0->extent.w) {
++		eye_w = (uint32_t)r0->extent.w;
++	}
++	uint32_t eye_h = (uint32_t)((double)eye_w * r0->extent.h / r0->extent.w + 0.5);
++	if (eye_h > VC_MAX_H) {
++		eye_h = VC_MAX_H;
++	}
++	uint32_t total_w = both ? eye_w * 2 : eye_w;
++	VkFormat src_fmt = (VkFormat)sc0->vkic.info.format;
++	VkFormat fmt = srgb_like(src_fmt) ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
++
++	struct vk_bundle *vk = vc->vk;
++	VkFormatProperties fp = {0};
++	vk->vkGetPhysicalDeviceFormatProperties(vk->physical_device, src_fmt, &fp);
++	if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT)) {
++		return;
++	}
++	if (!ensure_staging(vc, total_w, eye_h, fmt)) {
++		U_LOG_W("visor capture: no staging image for %ux%u", total_w, eye_h);
++		vc->enabled = false;
++		return;
++	}
++
++	uint32_t family = vk->main_queue->family_index;
++	VkCommandBuffer cmd = VK_NULL_HANDLE;
++	vk_cmd_pool_lock(&vc->pool);
++	VkResult ret =
++	    vk_cmd_pool_create_and_begin_cmd_buffer_locked(vk, &vc->pool, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, &cmd);
++	if (ret != VK_SUCCESS) {
++		vk_cmd_pool_unlock(&vc->pool);
++		return;
++	}
++
++	VkImage sources[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
++	uint32_t source_count = 0;
++	for (uint32_t v = 0; v < (both ? 2u : 1u); v++) {
++		struct comp_swapchain *sc = comp_swapchain(comp_layer_get_swapchain(layer, v));
++		if (sc == NULL || views[v].sub.image_index >= sc->vkic.image_count) {
++			continue;
++		}
++		VkImage img = sc->vkic.images[views[v].sub.image_index].handle;
++		if (source_count == 0 || sources[0] != img) {
++			sources[source_count++] = img;
++		}
++	}
++
++	// The client released the images to us in SHADER_READ_ONLY_OPTIMAL and
++	// gave up ownership (VK_QUEUE_FAMILY_EXTERNAL); take it, copy, give it back.
++	VkImageMemoryBarrier pre[3];
++	uint32_t npre = 0;
++	for (uint32_t i = 0; i < source_count; i++) {
++		pre[npre++] = barrier(sources[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++		                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT,
++		                      VK_QUEUE_FAMILY_EXTERNAL, family);
++	}
++	pre[npre++] = barrier(vc->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
++	                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
++	vk->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0,
++	                         NULL, npre, pre);
++
++	uint32_t eyes_done = 0;
++	for (uint32_t v = 0; v < (both ? 2u : 1u); v++) {
++		struct comp_swapchain *sc = comp_swapchain(comp_layer_get_swapchain(layer, v));
++		if (sc == NULL || views[v].sub.image_index >= sc->vkic.image_count) {
++			continue;
++		}
++		const struct xrt_sub_image *sub = &views[v].sub;
++		int32_t dx = (both && v == 1) ? (int32_t)eye_w : 0;
++		VkImageBlit blit = {
++		    .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, sub->array_index, 1},
++		    .srcOffsets = {{sub->rect.offset.w, sub->rect.offset.h, 0},
++		                   {sub->rect.offset.w + sub->rect.extent.w, sub->rect.offset.h + sub->rect.extent.h, 1}},
++		    .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++		    .dstOffsets = {{dx, 0, 0}, {dx + (int32_t)eye_w, (int32_t)eye_h, 1}},
++		};
++		vk->vkCmdBlitImage(cmd, sc->vkic.images[sub->image_index].handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++		                   vc->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
++		eyes_done |= 1u << v;
++	}
++
++	VkImageMemoryBarrier post[3];
++	uint32_t npost = 0;
++	for (uint32_t i = 0; i < source_count; i++) {
++		post[npost++] = barrier(sources[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++		                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, 0, family,
++		                        VK_QUEUE_FAMILY_EXTERNAL);
++	}
++	post[npost++] = barrier(vc->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++	                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_QUEUE_FAMILY_IGNORED,
++	                        VK_QUEUE_FAMILY_IGNORED);
++	vk->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0,
++	                         NULL, npost, post);
++
++	VkBufferImageCopy copy = {
++	    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++	    .imageExtent = {total_w, eye_h, 1},
++	};
++	vk->vkCmdCopyImageToBuffer(cmd, vc->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vc->buffer, 1, &copy);
++	VkBufferMemoryBarrier host = {
++	    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
++	    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++	    .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
++	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++	    .buffer = vc->buffer,
++	    .size = VK_WHOLE_SIZE,
++	};
++	vk->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &host, 0,
++	                         NULL);
++
++	// Small copy on our own queue; waiting here keeps the images ours until done.
++	ret = vk_cmd_pool_end_submit_wait_and_free_cmd_buffer_locked(vk, &vc->pool, cmd);
++	vk_cmd_pool_unlock(&vc->pool);
++	if (ret != VK_SUCCESS || eyes_done == 0) {
++		return;
++	}
++
++	// Publish with a per-slot seqlock: zero while writing, final seq after.
++	uint32_t slot = vc->next_slot++ % vc->slot_count;
++	size_t hdr = 64 + 64 * (size_t)slot;
++	__atomic_store_n((uint64_t *)(h + hdr), (uint64_t)0, __ATOMIC_RELEASE);
++	memcpy(h + VC_HEADER + vc->slot_bytes * slot, vc->mapped, (size_t)total_w * eye_h * 4);
++	put_u32(h, hdr + 8, total_w);
++	put_u32(h, hdr + 12, eye_h);
++	put_u32(h, hdr + 16, total_w * 4);
++	put_u32(h, hdr + 20, eyes_done);
++	put_i64(h, hdr + 24, frame_id);
++	put_i64(h, hdr + 32, layer->data.timestamp);
++	put_i64(h, hdr + 40, os_monotonic_get_ns());
++	put_u32(h, hdr + 48, 0);
++	uint64_t seq = ++vc->seq;
++	__atomic_store_n((uint64_t *)(h + hdr), seq, __ATOMIC_RELEASE);
++	put_u32(h, 32, slot);
++	__atomic_store_n((uint64_t *)(h + 24), seq, __ATOMIC_RELEASE);
++	__atomic_store_n((uint64_t *)(h + 256), request, __ATOMIC_RELEASE);
++
++	vc->served_request = request;
++	vc->last_capture_ns = now;
++}
++
++void
++null_visor_capture_fini(struct null_visor_capture *vc)
++{
++	if (vc->vk != NULL && vc->enabled) {
++		destroy_staging(vc);
++		vk_cmd_pool_destroy(vc->vk, &vc->pool);
++	}
++	if (vc->shm != NULL) {
++		munmap(vc->shm, vc->shm_size);
++		vc->shm = NULL;
++	}
++	if (vc->fd >= 0) {
++		close(vc->fd);
++		vc->fd = -1;
++		shm_unlink(vc->name);
++	}
++	vc->enabled = false;
++}
+diff --git a/src/xrt/compositor/null/null_visor_capture.h b/src/xrt/compositor/null/null_visor_capture.h
+new file mode 100644
+index 0000000..3bde0bd
+--- /dev/null
++++ b/src/xrt/compositor/null/null_visor_capture.h
+@@ -0,0 +1,68 @@
++// Copyright 2026, Visor contributors.
++// SPDX-License-Identifier: BSL-1.0
++/*!
++ * @file
++ * @brief  Frame capture for the null compositor: Visor's "eyes".
++ *
++ * When VISOR_XR_SHM names a POSIX shared memory object, the null compositor
++ * copies the first projection layer of each committed frame (when asked, or
++ * at a set rate) into it. The copy happens on the compositor's own queue after
++ * the application's GPU work is known complete, so the app is never touched.
++ *
++ * The memory layout is shared with Visor's OpenXR layer and Python reader
++ * (visor/xr/frames.py); see null_visor_capture.c for the header fields.
++ *
++ * @ingroup comp_null
++ */
++
++#pragma once
++
++#include "vk/vk_helpers.h"
++#include "vk/vk_cmd_pool.h"
++#include "util/comp_layer_accum.h"
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct null_visor_capture
++{
++	bool enabled;
++	struct vk_bundle *vk;
++	struct vk_cmd_pool pool;
++
++	int fd;
++	uint8_t *shm;
++	size_t shm_size;
++	size_t slot_bytes;
++	uint32_t slot_count;
++	uint32_t next_slot;
++	uint64_t seq;
++	uint64_t served_request;
++	int64_t last_capture_ns;
++	char name[128];
++
++	VkImage image;
++	VkDeviceMemory image_mem;
++	VkBuffer buffer;
++	VkDeviceMemory buffer_mem;
++	void *mapped;
++	uint32_t width, height;
++	VkFormat format;
++};
++
++void
++null_visor_capture_init(struct null_visor_capture *vc, struct vk_bundle *vk);
++
++void
++null_visor_capture_frame(struct null_visor_capture *vc, struct comp_layer_accum *accum, int64_t frame_id);
++
++void
++null_visor_capture_fini(struct null_visor_capture *vc);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/xrt/state_trackers/oxr/oxr_swapchain_vk.c b/src/xrt/state_trackers/oxr/oxr_swapchain_vk.c
+index f808291..dd69eac 100644
+--- a/src/xrt/state_trackers/oxr/oxr_swapchain_vk.c
++++ b/src/xrt/state_trackers/oxr/oxr_swapchain_vk.c
+@@ -18,6 +18,16 @@
+ 
+ #define WAIT_IN_ACQUIRE (true)
+ 
++/*
++ * Some engines (Unreal with Meta's XR plugin, which forces
++ * xr.OpenXRAcquireMode=1) acquire swapchain images on a thread that doesn't
++ * own the VkQueue, while their render thread submits to it. Our acquire
++ * barrier then races their submissions. Moving the barrier into
++ * xrWaitSwapchainImage, which such engines call with the queue synchronized,
++ * avoids that. Off by default: it is not what the spec promises apps.
++ */
++DEBUG_GET_ONCE_BOOL_OPTION(barrier_in_wait, "VISOR_XR_VK_BARRIER_IN_WAIT", false)
++
+ 
+ static XrResult
+ vk_implicit_acquire_image(struct oxr_logger *log,
+@@ -47,8 +57,10 @@ vk_implicit_acquire_image(struct oxr_logger *log,
+ 	 * that we can only use the queue in xrAcquireSwapchainImage so must be
+ 	 * done here.
+ 	 */
+-	xret = xrt_swapchain_barrier_image(xsc, XRT_BARRIER_TO_APP, index);
+-	OXR_CHECK_XRET(log, sc->sess, xret, xrt_swapchain_barrier_image);
++	if (!debug_get_bool_option_barrier_in_wait()) {
++		xret = xrt_swapchain_barrier_image(xsc, XRT_BARRIER_TO_APP, index);
++		OXR_CHECK_XRET(log, sc->sess, xret, xrt_swapchain_barrier_image);
++	}
+ 
+ 	*out_index = index;
+ 
+@@ -92,6 +104,11 @@ vk_implicit_wait_image(struct oxr_logger *log, struct oxr_swapchain *sc, const X
+ 		OXR_CHECK_XRET(log, sc->sess, xret, xrt_swapchain_wait_image);
+ 	}
+ 
++	if (debug_get_bool_option_barrier_in_wait()) {
++		xrt_result_t xret = xrt_swapchain_barrier_image(xsc, XRT_BARRIER_TO_APP, index);
++		OXR_CHECK_XRET(log, sc->sess, xret, xrt_swapchain_barrier_image);
++	}
++
+ 	// The app can only wait on one image.
+ 	sc->inflight.yes = true;
+ 	sc->inflight.index = (int)index;
