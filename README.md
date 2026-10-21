@@ -7,14 +7,17 @@
 
 **Cross-platform Quest developer toolkit** — an open source alternative to Meta Quest Developer Hub (MQDH) that runs on Linux, macOS, and Windows (MQDH is Windows/Mac only, so Linux users had nothing), plus something MQDH doesn't have on any platform: an MCP server that lets AI coding agents — Claude Code and any other MCP-compatible client — see and control your headset.
 
-Four layers, one library:
+And a **virtual headset**: any OpenXR app (Unreal, Unity, Godot — no plugin, no code changes) runs headless in a simulated Quest 3 on Linux, where you, a script, or a fleet of AI playtesters hold the head and both controllers, see every frame, freeze time, and get back bug reports with a one-command repro.
+
+Five layers, one library:
 
 | Layer | Command | What it does |
 |-------|---------|--------------|
 | Python library | `import visor.adb` | Quest-aware ADB wrapper: devices, apps, capture, logs, performance |
-| MCP server | `visor-mcp` | 29 `quest_*` tools for any MCP client — screenshots the model can *see*, crash logs, perf monitoring |
+| MCP server | `visor-mcp` | 32 `quest_*` tools for any MCP client — screenshots the model can *see*, crash logs, perf monitoring — plus 23 `xr_*` tools that let it play VR apps in the virtual headset |
 | CLI | `visor` | MQDH-like functionality from the terminal |
-| Web dashboard | `visor ui` | Live instrument panel: perf charts, viewport, logs, app/file management |
+| Web dashboard | `visor ui` | Live instrument panel: perf charts, viewport, logs, app/file management — and a SIMULATOR you can drive with mouse and keyboard |
+| Virtual headset | `visor sim` | Run OpenXR apps headless in a simulated Quest 3; drive, step, record, replay, playtest, run 20 at once |
 
 ## Requirements
 
@@ -120,6 +123,83 @@ Then ask your assistant things like:
 - *"Is my latest build ready for the Meta Store?"* — `quest_audit_build` reads the APK; it needs no account and uploads nothing
 
 Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_app_memory`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_perf_session`, `quest_perf_diff`, `quest_launch_benchmark`, `quest_trace`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`, `quest_list_builds`, `quest_audit_build`, `quest_upload_build`.
+
+Virtual headset (see [below](#virtual-headset)): `xr_launch`, `xr_list`, `xr_stop`, `xr_screenshot`, `xr_actions`, `xr_click`, `xr_point`, `xr_press`, `xr_hold`, `xr_stick`, `xr_look`, `xr_walk`, `xr_move_hand`, `xr_press_action`, `xr_pause`, `xr_resume`, `xr_step`, `xr_stats`, `xr_events`, `xr_system_event`, `xr_logs`, `xr_record`, `xr_replay`.
+
+## Virtual headset
+
+Visor can be the headset. `visor sim` runs any OpenXR app on this computer inside a simulated Quest 3 — no window, no HMD, nothing added to the app — and gives you (or an agent) the head, both Touch controllers, the app's frames, and a pause button:
+
+```bash
+visor sim setup                                   # one-time: builds the runtime + layer (~5 min, no root)
+visor sim run demo                                # a test scene, to see it working
+visor sim run ~/Projects/Game/Game.uproject --detach   # Unreal: launches the project in -game -vr
+
+visor sim shot -o view.png                        # what the headset sees (left eye)
+visor sim look 30 -10                             # turn the head: yaw 30° left, pitch 10° down
+visor sim click 480 660                           # aim the right laser at that pixel and pull the trigger
+visor sim press right a                           # press A
+visor sim stick left 0 1 --frames 72              # push the left stick forward for a second
+visor sim info                                    # the app's own controls: every action and its binding
+
+visor sim pause                                   # freeze the world…
+visor sim step 1                                  # …and advance exactly one frame
+visor sim event focus_lost                        # open the Meta menu: the app should pause
+visor sim record -t 20 --script run.json          # MP4 + a replay of every input
+visor sim replay run.json                         # play the inputs back, frame for frame
+```
+
+Or open `visor ui` → **SIMULATOR**: the live view, where dragging looks around and clicking presses what's under the cursor (shift-click for the left hand, W A S D to walk, space for the trigger), both controllers with draggable thumbsticks, pause/step, the app's haptics as they happen, and its bound controls lighting up.
+
+### AI agents play it
+
+Every `xr_*` MCP tool returns what the headset sees after the action, and the pixel coordinates in that image are what `xr_click` takes — so an assistant can play a VR app the way it would use a web page. Ask Claude Code things like *"launch my project in the virtual headset and get through onboarding; tell me where you got stuck"*. `xr_pause` stops the world between turns, so slow thinking costs nothing.
+
+### Playtests
+
+```bash
+visor sim playtest ~/Projects/Game --persona first-timer --steps 40
+visor sim playtest demo --brain monkey --persona speedrunner --seed 7   # model-free, reproducible
+visor sim personas
+```
+
+A playtester is Claude (`claude-opus-5-5`, needs `ANTHROPIC_API_KEY`) in character — a **first-timer** who doesn't read instructions, a **speedrunner** hunting soft-locks, a **seated** player who can't reach high shelves (the eye height and reach are enforced, not role-played), a **motion-sensitive** player, a **one-handed** player, a **thorough explorer** — or a seeded **monkey** that costs nothing. Alongside what the agent reports, the run watches for what's measurably wrong: crashes, frozen screens, black screens, input that stops doing anything, errors in the app's log, and frame rate below the display's. Each run writes, under `~/.local/share/visor/xr/runs/<name>/`:
+
+- `report.html` — every issue with its screenshot and the actions before it, the verdict, the frame-time chart, every step
+- `repro.sh` — relaunches the app frozen and replays every input at the same frame (Unreal runs with a fixed timestep, so game time lines up too)
+- `video.mp4`, `frames.json` (per-frame timing), `app.log`, and the engine's crash report if there was one
+
+The dashboard's **PLAYTESTS** page runs them and keeps the reports.
+
+### Fleets
+
+```bash
+visor sim fleet demo --count 20 --seconds 30                       # soak 20 isolated copies at once
+visor sim fleet ~/Projects/Game --count 4 --playtest --personas first-timer,speedrunner,seated
+```
+
+Each copy is its own runtime, socket and frame buffer, so they don't share anything but the GPU. Findings are merged across copies ("8 of 20 runs hit this"). On an RTX 5070 laptop, 20 copies of the demo hold 72 fps each with no missed frames; an Unreal project costs ~4 GB of RAM per copy.
+
+### How it works
+
+```
+your app ──► OpenXR loader ──► Visor layer ──────────► Monado (in-process)
+ (unchanged)                    poses, buttons,         null compositor shaped like a Quest 3:
+                                actions, pause/step,    72/80/90/120 Hz, 1680×1760 per eye,
+                                events, control socket  frames copied out to shared memory
+                                        ▲                           │
+                         visor sim / visor ui / visor-mcp ◄─────────┘
+```
+
+- **The layer** (`native/layer`, C++) is an OpenXR API layer: it answers `xrLocateViews`/`xrLocateSpace` from a virtual body, picks the Touch interaction profile, resolves every action the app defined against its own bindings, and gates `xrWaitFrame` for pause/step. It works over any OpenXR runtime, so it can drive a real headset's runtime too (`VISOR_XR_MODE=observe` watches without driving).
+- **The runtime** is [Monado](https://monado.freedesktop.org) built in-process with a small patch (`native/monado`): Quest-shaped refresh rates and eye buffers, and frames copied out compositor-side, so capturing never touches the app's GPU queue.
+- **Determinism**: inputs are applied at frame boundaries and recorded by frame number, so a recording replays to the same picture.
+
+### Limits, for now
+
+- Desktop Linux, Vulkan apps (Unreal and Godot default to Vulkan; Unity with the Vulkan graphics API). OpenGL apps can be driven but not watched.
+- Android APKs don't run here — the same project built for Linux (or its `.uproject`) does. On a real Quest, the OpenXR loader bundled in Unreal APKs looks for layers in the APK's own `assets/openxr/1/api_layers/`, so a dev build can carry the layer without root; that path isn't built yet.
+- Apps hear no microphone unless you pass `--mic` (then they hear yours); there's no synthetic speech input yet.
 
 ## Publishing to the Meta Horizon Store
 
