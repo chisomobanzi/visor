@@ -514,3 +514,56 @@ def playtest(
         import webbrowser
 
         webbrowser.open(f"file://{html}")
+
+
+@sim_app.command()
+def fleet(
+    target: str = typer.Argument(..., help="What to run in every copy (.uproject, build, executable, 'demo')"),
+    count: int = typer.Option(4, "--count", "-n", help="How many copies"),
+    playtest: bool = typer.Option(False, "--playtest", help="Playtest each copy instead of just soaking it"),
+    personas: str = typer.Option("first-timer", "--personas", help="Comma-separated, assigned round-robin"),
+    brain: str = typer.Option("monkey", "--brain", help="monkey (free, seeded) | claude"),
+    steps: int = typer.Option(30, "--steps", help="Actions per playtest"),
+    seconds: float = typer.Option(30.0, "--seconds", help="Soak length per copy"),
+    scale: float = typer.Option(0.5, "--scale", help="Eye-buffer scale per copy"),
+    concurrency: int = typer.Option(0, "--concurrency", "-j", help="Copies at once (default: all)"),
+    map_name: Optional[str] = typer.Option(None, "--map", "-m"),
+    open_report: bool = typer.Option(False, "--open"),
+):
+    """Run many isolated copies at once — soak them, or playtest each with its own persona and seed."""
+    from visor.xr.fleet import Fleet, FleetConfig
+
+    cfg = FleetConfig(target=target, count=count, mode="playtest" if playtest else "soak", seconds=seconds,
+                      concurrency=concurrency, scale=scale, map=map_name,
+                      personas=[p.strip() for p in personas.split(",") if p.strip()], brain=brain, steps=steps)
+    status_style = {"queued": "dim", "starting": "yellow", "running": "cyan", "done": "green",
+                    "crashed": "bold red", "failed": "red"}
+
+    def table(results) -> Table:
+        t = Table(box=None, header_style="bold dim")
+        for col in ("#", "status", "persona", "fps", "p99", "missed", "progress", "issues", "time"):
+            t.add_column(col)
+        for r in results:
+            prog = (f"step {r.frame}" if playtest else f"frame {r.frame}") if r.frame else ""
+            t.add_row(f"{r.index:02d}", f"[{status_style.get(r.status, '')}]{r.status}[/]", r.persona or "",
+                      f"{r.fps:.0f}" if r.fps else "", f"{r.p99_ms:.0f} ms" if r.p99_ms else "",
+                      str(r.missed) if r.fps else "", prog, str(r.issues or ""), f"{r.seconds:.0f}s" if r.seconds else "")
+        return t
+
+    f = Fleet(cfg)
+    with Live(table(f.results), console=console, refresh_per_second=2) as live:
+        f.on_update = lambda results: live.update(table(results))
+        try:
+            summary = f.run()
+        except KeyboardInterrupt:
+            f.stop()
+            raise typer.Exit(130)
+    console.print(f"[bold]{summary['ok']}/{count}[/bold] completed · {summary['crashed']} crashed · "
+                  f"mean {summary['mean_fps']} fps · {len(summary['issues'])} distinct issues · "
+                  f"{summary['elapsed_s'] / 60:.1f} min")
+    page = f.dir / "fleet.html"
+    console.print(f"report  file://{page}")
+    if open_report:
+        import webbrowser
+
+        webbrowser.open(f"file://{page}")

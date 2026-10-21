@@ -1,4 +1,4 @@
-"""Autonomous playtests: personas, oracles, brains, reports."""
+"""Autonomous playtests: personas, oracles, brains, reports, fleets."""
 
 import json
 from types import SimpleNamespace
@@ -206,6 +206,22 @@ def test_report_html_renders(tmp_path):
     assert "Mic check blocks progress" in html and "4<small>/10</small>" in html
     assert "&lt;b&gt;stuck&lt;/b&gt;" in html  # agent text is escaped
     assert "real-time frames" in html
+
+
+def test_fleet_merges_issues_by_signature(tmp_path, monkeypatch):
+    from visor.xr.fleet import Fleet, FleetConfig
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    f = Fleet(FleetConfig(target="demo", count=3, mode="playtest"))
+    for i, r in enumerate(f.results):
+        (f.dir / r.name).mkdir(parents=True)
+        issues = [{"title": f"Frame rate below the display rate ({60 + i} of 72 fps)", "severity": "major",
+                   "category": "performance", "screenshot": None}]
+        (f.dir / r.name / "report.json").write_text(json.dumps({"issues": issues}))
+        r.report, r.status = f"{r.name}/report.html", "done"
+    s = f.summary(10)
+    assert len(s["issues"]) == 1 and len(s["issues"][0]["runs"]) == 3
+    assert s["ok"] == 3
 
 
 def test_call_dataclass_defaults():
