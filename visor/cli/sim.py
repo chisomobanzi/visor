@@ -1,12 +1,14 @@
 """`visor sim` — the virtual headset from the terminal.
 
 Run any OpenXR app headless inside a simulated Quest 3, then look around,
-point, press, step frame by frame, record and replay.
+point, press, step frame by frame, record and replay — or hand it to an AI
+playtester.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -411,3 +413,104 @@ def replay(
     late = int(r.get("late_frames", 0))
     console.print(f"[dim]scheduled {int(r['scheduled'])} input changes from frame {int(r['start_frame'])}"
                   f"{f' ({late} frames late: the app was already past the start)' if late else ''}[/dim]")
+
+
+# --------------------------------------------------------------------------
+# autonomous playtests
+
+
+@sim_app.command()
+def personas():
+    """The playtester personas and what each is best at catching."""
+    from visor.xr.playtest.personas import PERSONAS
+
+    t = Table(box=None, header_style="bold dim")
+    t.add_column("persona")
+    t.add_column("who")
+    t.add_column("catches")
+    for p in PERSONAS.values():
+        t.add_row(f"[bold]{p.key}[/bold]", p.tagline, ", ".join(p.watch_for[:3]))
+    console.print(t)
+
+
+@sim_app.command()
+def playtest(
+    target: str = typer.Argument(..., help="A .uproject, packaged build, OpenXR executable, or 'demo'"),
+    persona: str = typer.Option("first-timer", "--persona", "-p", help="See `visor sim personas`"),
+    goal: Optional[str] = typer.Option(None, "--goal", "-g", help="What the playtester should try to do"),
+    brain: str = typer.Option("claude", "--brain", help="claude (an AI playtester) | monkey (seeded random input)"),
+    model: str = typer.Option("claude-opus-5-5", "--model"),
+    effort: str = typer.Option("medium", "--effort", help="low | medium | high | xhigh | max"),
+    steps: int = typer.Option(40, "--steps", "-n", help="Maximum actions"),
+    minutes: float = typer.Option(20.0, "--minutes", help="Wall-clock limit"),
+    seed: int = typer.Option(0, "--seed", help="Seed for the monkey brain"),
+    map_name: Optional[str] = typer.Option(None, "--map", "-m"),
+    headset: str = typer.Option("quest3", "--headset"),
+    no_video: bool = typer.Option(False, "--no-video"),
+    open_report: bool = typer.Option(False, "--open", help="Open the HTML report when done"),
+):
+    """Let an autonomous playtester play the app and write a bug report.
+
+    Each run produces a report with every issue (screenshot, repro steps), a
+    replay script that reproduces the session, a video, a frame-timing trace
+    and the crash log if it crashed."""
+    from visor.xr.playtest.session import DEFAULT_GOAL, Playtest, PlaytestConfig
+
+    if brain == "claude" and not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+                                  or Path.home().joinpath(".config", "anthropic").exists()):
+        _die("the Claude playtester needs Anthropic credentials (export ANTHROPIC_API_KEY, or `ant auth login`). "
+             "Try --brain monkey for a model-free run.")
+    cfg = PlaytestConfig(target=target, persona=persona, goal=goal or DEFAULT_GOAL, brain=brain, model=model,
+                         effort=effort, max_steps=steps, max_minutes=minutes, seed=seed, map=map_name,
+                         headset=headset, video=not no_video)
+    sev_style = {"blocker": "bold white on red", "major": "bold red", "minor": "yellow", "note": "dim"}
+    status = console.status("starting")
+    status.start()
+
+    def on_event(kind: str, data: dict) -> None:
+        if kind == "status":
+            status.update(f"[bold]{data['message']}[/bold]")
+        elif kind == "action":
+            status.update(f"step {data['step']}/{steps}")
+            args = ", ".join(f"{k}={v}" for k, v in data["args"].items())
+            if data.get("thought"):
+                console.print(f"  [dim italic]{data['thought'][:160]}[/dim italic]")
+            console.print(f"  [bold cyan]{data['step']:>3}[/bold cyan] {data['action']}[dim]({args})[/dim]")
+        elif kind == "issue":
+            i = data["issue"]
+            console.print(f"      [{sev_style.get(i['severity'], '')}] {i['severity'].upper()} [/] {i['title']}")
+        elif kind == "error":
+            console.print(f"  [red]{data['message']}[/red]")
+
+    try:
+        test = Playtest(cfg, on_event=on_event)
+    except ValueError as e:
+        status.stop()
+        _die(str(e))
+    console.print(f"[bold]{test.persona.name}[/bold] playtests [bold]{target}[/bold] "
+                  f"[dim]({brain}{'' if brain != 'claude' else ' · ' + model}, up to {steps} actions)[/dim]")
+    try:
+        report = test.run()
+    except KeyboardInterrupt:
+        status.stop()
+        console.print("[yellow]stopped early[/yellow]")
+        raise typer.Exit(130)
+    finally:
+        status.stop()
+    v = report.get("verdict") or {}
+    issues = report.get("issues", [])
+    counts = {s: sum(1 for i in issues if i["severity"] == s) for s in ("blocker", "major", "minor", "note")}
+    summary = " · ".join(f"{n} {s}" for s, n in counts.items() if n) or "no issues"
+    rating = v.get("rating")
+    achieved = v.get("goal_achieved")
+    outcome = ("goal reached" if achieved else "goal not reached") if achieved is not None else "scripted run"
+    console.print(Panel(
+        f"{v.get('summary', '')}\n\n[bold]{summary}[/bold]   "
+        f"{f'rating {rating}/10   ' if rating is not None else ''}{outcome}",
+        title=f"{report['persona']['name']} · {report['app']['name']}", expand=False))
+    html = test.dir / "report.html"
+    console.print(f"report  file://{html}")
+    if open_report:
+        import webbrowser
+
+        webbrowser.open(f"file://{html}")
