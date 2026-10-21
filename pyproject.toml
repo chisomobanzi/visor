@@ -57,6 +57,15 @@ Issues = "https://github.com/chisomobanzi/visor/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["visor"]
 
+# The virtual headset's native half (OpenXR layer sources, Monado patch) ships
+# inside the package so `visor sim setup` can build it from any install.
+[tool.hatch.build.targets.wheel.force-include]
+"native/layer/src" = "visor/xr/native/layer/src"
+"native/layer/CMakeLists.txt" = "visor/xr/native/layer/CMakeLists.txt"
+"native/layer/XrApiLayer_visor_agent.json.in" = "visor/xr/native/layer/XrApiLayer_visor_agent.json.in"
+"native/layer/exports.map" = "visor/xr/native/layer/exports.map"
+"native/monado" = "visor/xr/native/monado"
+
 [tool.ruff]
 target-version = "py310"
 

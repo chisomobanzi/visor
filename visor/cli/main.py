@@ -25,6 +25,7 @@ from visor.publish.ovrtool import fetch as ovrtool_fetch
 from visor.publish.ovrtool import version as ovrtool_version
 from visor.publish.upload import is_release_channel
 from visor.publish.upload import upload as publish_upload
+from visor.cli.sim import sim_app
 
 app = typer.Typer(
     name="visor",
@@ -32,6 +33,7 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
+app.add_typer(sim_app, name="sim")
 console = Console()
 err_console = Console(stderr=True)
 
