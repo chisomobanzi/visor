@@ -47,10 +47,10 @@
   }
   function select(name) {
     if (S.current === name && S.streamKey === name) return;
-    S.current = name; S.events = 0; S.fpsHistory = [];
+    S.current = name; S.events = 0; S.fpsHistory = []; S.saidCount = -1;
     $("#sim-feed").innerHTML = '<li class="empty">Haptic pulses and session changes show up here.</li>';
     $("#sim-stage").hidden = false; $("#sim-empty").hidden = true;
-    startStream(); loadInfo(); renderTabs();
+    startStream(); loadInfo(); pollMic(); renderTabs();
   }
 
   /* ---------------- launch ---------------- */
@@ -465,6 +465,75 @@
     } catch (e) { fail(e); }
   };
 
+  /* ---------------- voice ---------------- */
+  const LANG_NAMES = { en: "English", es: "Spanish", fr: "French", de: "German", it: "Italian", pt: "Portuguese",
+    nl: "Dutch", pl: "Polish", ru: "Russian", uk: "Ukrainian", tr: "Turkish", sv: "Swedish", ar: "Arabic",
+    hi: "Hindi", sw: "Swahili", vi: "Vietnamese", zh: "Chinese" };
+  S.volume = 1; S.saidCount = -1; S.voicesReady = false;
+  async function loadVoices() {
+    try {
+      const v = await api("/api/xr/voices");
+      const sel = $("#sim-say-lang");
+      sel.innerHTML = Object.keys(v.languages).sort((a, b) => (a === "en" ? -1 : b === "en" ? 1 : a.localeCompare(b)))
+        .map(code => `<option value="${code}">${esc(LANG_NAMES[code] || code)}${v.installed.includes(v.languages[code]) ? "" : " ↓"}</option>`)
+        .join("");
+      sel.title = "Language — ↓ downloads its voice (~60 MB) the first time";
+      S.voicesReady = v.available;
+      if (!v.available) {
+        $("#sim-said").innerHTML = '<li class="empty">Speaking needs a text-to-speech engine: <code>pip install \'visor-dev[voice]\'</code></li>';
+        $("#sim-voice").classList.add("off");
+      }
+    } catch (e) { /* the card stays as it is */ }
+  }
+  function micLabel(st) {
+    const el = $("#sim-micstate");
+    if (!st || !st.available) { el.className = "micstate"; el.querySelector("b").textContent = "REAL MIC"; el.title = st?.reason || ""; return; }
+    const speaking = st.speaking && st.world !== "paused";
+    el.className = "micstate" + (speaking ? " speaking" : st.listening ? " on" : "");
+    el.querySelector("b").textContent = speaking ? "SPEAKING" : st.speaking ? "WAITING FOR THE WORLD" : st.listening ? "LISTENING" : "NOT LISTENING";
+    el.title = st.listening ? `the app has its microphone open (${st.streams.map(s => `${s.rate} Hz × ${s.channels}`).join(", ")})`
+      : "the app hasn't opened its microphone, so it can't hear you right now";
+  }
+  function renderSaid(history) {
+    if (!history.length) return;
+    $("#sim-said").innerHTML = history.slice().reverse().map(h => {
+      const when = `${h.duration.toFixed(1)}s · ${new Date(h.at * 1000).toLocaleTimeString([], { hour12: false })}`;
+      return h.kind === "speech"
+        ? `<li data-text="${esc(h.label)}" title="Say it again"><q>${esc(h.label)}</q><small>${when}</small></li>`
+        : `<li class="rec"><span>♪ ${esc(h.label || "recording")}</span><small>${when}</small></li>`;
+    }).join("");
+  }
+  async function pollMic() {
+    if (!S.current || !active()) return;
+    try {
+      const st = await api(xr("/mic"));
+      micLabel(st);
+      $("#sim-voice").classList.toggle("off", !st.available || !S.voicesReady);
+      if (st.available && st.history.length !== S.saidCount) { S.saidCount = st.history.length; renderSaid(st.history); }
+      if (!st.available) $("#sim-said").innerHTML = `<li class="empty">${esc(st.reason)}</li>`;
+    } catch (e) { /* app gone: the tab bar handles it */ }
+  }
+  async function sayIt(text) {
+    text = (text || "").trim();
+    if (!text || !S.current) return;
+    const go = $("#sim-say-go");
+    go.disabled = true; go.textContent = "…";
+    try {
+      const r = await post(xr("/say"), { text, language: $("#sim-say-lang").value || null, volume: S.volume });
+      $("#sim-say").value = "";
+      if (!r.listening) toast("Said — but the app isn't listening right now, so it heard nothing.");
+      pollMic();
+    } catch (e) { fail(e); }
+    finally { go.disabled = false; go.textContent = "SAY"; }
+  }
+  $("#sim-say-form").addEventListener("submit", (e) => { e.preventDefault(); sayIt($("#sim-say").value); });
+  $("#sim-said").addEventListener("click", (e) => { const li = e.target.closest("li[data-text]"); if (li) sayIt(li.dataset.text); });
+  $("#sim-say-vol").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-vol]"); if (!b) return;
+    S.volume = +b.dataset.vol;
+    $("#sim-say-vol").querySelectorAll("button").forEach(x => x.setAttribute("aria-checked", String(x === b)));
+  });
+
   /* ---------------- wiring ---------------- */
   $("#sim-new").onclick = () => openLaunch($("#sim-launch").hidden);
   $("#sim-open-launch").onclick = () => openLaunch(true);
@@ -477,7 +546,7 @@
   function onRoute() {
     const id = location.hash.slice(1);
     if (id === "sim" || id === "playtests") {
-      if (!started) { started = true; loadSuggest(); loadPersonas(); updateCost(); }
+      if (!started) { started = true; loadSuggest(); loadPersonas(); updateCost(); loadVoices(); }
       if (id === "sim") { refreshApps(); if (S.current && S.streamKey !== S.current) startStream(); }
       if (id === "playtests") loadReports();
     } else if (S.streamKey) {
@@ -489,5 +558,6 @@
   setInterval(() => { if (active()) refreshApps(); }, 2500);
   setInterval(poll, 700);
   setInterval(() => { if (active()) loadInfo(); }, 1200);
+  setInterval(pollMic, 900);
   setInterval(pollPlaytest, 1000);
 })();

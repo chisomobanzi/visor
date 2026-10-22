@@ -95,6 +95,35 @@ textarea {
 .sysrow button { flex: 1; padding: 7px 8px; }
 .sysrow button.on { border-color: var(--warn); color: var(--warn); }
 
+/* ---------- voice ---------- */
+.micstate { display: inline-flex; align-items: center; gap: 6px; letter-spacing: .12em; }
+.micstate i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.micstate b { font-weight: 500; color: var(--faint); }
+.micstate.on i { background: var(--good); animation: pulse 2.4s infinite; }
+.micstate.on b { color: var(--good); }
+.micstate.speaking i { background: var(--lens); box-shadow: 0 0 8px var(--lens); }
+.micstate.speaking b { color: var(--lens); }
+.sayrow { display: flex; gap: 6px; }
+.sayrow input { flex: 1; min-width: 0; }
+.sayopts { display: flex; gap: 6px; margin-top: 8px; }
+.sayopts select { flex: 1; min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 5px 9px; font-size: 10px; background: transparent; color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-checked="true"] { background: rgba(107,203,223,.12); color: var(--lens); }
+.said { list-style: none; padding: 0; margin-top: 10px; max-height: 150px; overflow: auto; font-size: 12px;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.said li { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(42,48,59,.5);
+  align-items: baseline; cursor: pointer; }
+.said li:last-child { border-bottom: 0; }
+.said li:hover q { color: var(--lens); }
+.said q { color: var(--ink); quotes: "“" "”"; }
+.said small { font-family: var(--mono); font-size: 10px; color: var(--faint); white-space: nowrap; }
+.said small.deaf { color: var(--warn); }
+.said .empty { display: block; color: var(--faint); cursor: default; }
+.said li.rec { cursor: default; color: var(--muted); }
+.voice.off .sayrow, .voice.off .sayopts { opacity: .45; pointer-events: none; }
+
 /* ---------- side panel ---------- */
 .sim-side { display: flex; flex-direction: column; gap: 12px; }
 .sim-side .card { padding: 14px; }

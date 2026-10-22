@@ -368,6 +368,50 @@ def system_event(name: str, event: str):
     return {"ok": True}
 
 
+# --------------------------------------------------------------------------
+# the voice
+
+
+@router.get("/voices")
+def voices():
+    from visor.xr import voice as tts
+
+    return {"available": tts.available(), "languages": tts.LANGUAGE_VOICES, "installed": tts.installed()}
+
+
+@router.get("/{name}/mic")
+def mic_status(name: str):
+    from visor.xr.mic import MicError
+
+    try:
+        return {"available": True, **_client(name).mic().status()}
+    except MicError as e:
+        return {"available": False, "reason": str(e)}
+
+
+class Say(BaseModel):
+    text: str
+    language: Optional[str] = None
+    voice: Optional[str] = None
+    volume: float = 1.0
+
+
+@router.post("/{name}/say")
+def say(name: str, body: Say):
+    from visor.xr import voice as tts
+    from visor.xr.mic import MicError
+
+    xr = _client(name)
+    try:
+        r = xr.say(body.text, voice=body.voice, language=body.language, volume=max(0.0, min(body.volume, 3.0)))
+    except (tts.VoiceError, MicError) as e:
+        raise HTTPException(409, str(e)) from None
+    # Speaking takes time: a paused world runs while the line is said, then freezes again.
+    r.update(_after(xr, round((float(r["duration"]) + 0.6) * 72)))
+    r.pop("audio", None)
+    return r
+
+
 _recordings: dict = {}
 
 

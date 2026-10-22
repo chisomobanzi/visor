@@ -616,7 +616,7 @@
           <div class="fld toggles">
             <label title="Freeze at the first frame; step it forward yourself"><input type="checkbox" id="sl-paused"> start paused</label>
             <label title="Eyes at 1.2 m"><input type="checkbox" id="sl-seated"> seated</label>
-            <label title="Let the app hear this computer's microphone"><input type="checkbox" id="sl-mic"> microphone</label>
+            <label title="Let the app hear this computer's real microphone, instead of only what Visor says to it"><input type="checkbox" id="sl-mic"> real microphone</label>
           </div>
         </div>
         <div class="sim-launch-foot">
@@ -683,6 +683,23 @@
               <button data-ev="recenter" title="Long-press recenter: LOCAL space jumps to where you're looking">RECENTER</button>
               <button id="sim-stop" class="danger" title="Ask the app to quit">STOP APP</button>
             </div>
+          </div>
+          <div class="card voice" id="sim-voice">
+            <h3 class="mini"><span>Voice</span><span class="micstate" id="sim-micstate" role="status"><i></i><b>—</b></span></h3>
+            <form class="sayrow" id="sim-say-form" autocomplete="off">
+              <input id="sim-say" maxlength="400" placeholder="Say something to the app…" aria-label="What to say into the headset's microphone"
+                     data-1p-ignore data-lpignore="true" data-bwignore spellcheck="true">
+              <button class="primary" id="sim-say-go" type="submit" title="Speak it (Enter)">SAY</button>
+            </form>
+            <div class="sayopts">
+              <select id="sim-say-lang" aria-label="Language"></select>
+              <div class="seg" id="sim-say-vol" role="radiogroup" aria-label="How loud">
+                <button type="button" role="radio" data-vol="0.35" aria-checked="false" title="Quiet, self-conscious voice">soft</button>
+                <button type="button" role="radio" data-vol="1" aria-checked="true" title="A normal voice at a headset mic">normal</button>
+                <button type="button" role="radio" data-vol="2" aria-checked="false" title="Raised voice">loud</button>
+              </div>
+            </div>
+            <ol class="said" id="sim-said"><li class="empty">The app hears only what you say here — never this computer's microphone.</li></ol>
           </div>
           <div class="card">
             <h3 class="mini"><span>Session</span><span id="sim-app-name"></span></h3>
