@@ -121,3 +121,18 @@ class TestCrashes:
     def test_clean_run(self, tmp_path):
         (tmp_path / "app.log").write_text("LogInit: hello\nLogExit: bye\n")
         assert detect_crash(tmp_path) is None
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc")
+def test_simulated_apps_go_first_when_memory_runs_out():
+    import subprocess
+
+    from visor.xr.sim import _first_to_go
+
+    p = subprocess.Popen(["sleep", "5"])
+    try:
+        _first_to_go(p.pid)
+        assert open(f"/proc/{p.pid}/oom_score_adj").read().strip() == "1000"
+    finally:
+        p.kill()
+        p.wait()

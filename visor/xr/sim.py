@@ -148,6 +148,16 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()[:40] or "app"
 
 
+def _first_to_go(pid: int) -> None:
+    """If memory runs out, the kernel should end a simulated app before
+    anything the user is working in (an open editor, a browser). Raising a
+    process's own OOM score needs no privileges; its children inherit it."""
+    try:
+        Path(f"/proc/{pid}/oom_score_adj").write_text("1000")
+    except OSError:
+        pass
+
+
 def _proc_children(pid: int) -> list[int]:
     out = []
     for stat in Path("/proc").glob("[0-9]*/stat"):
@@ -286,6 +296,7 @@ class SimInstance:
         finally:
             if isinstance(stdin, int) and stdin >= 0:
                 os.close(stdin)
+        _first_to_go(self.proc.pid)
         self.started_at = time.time()
         self._write_meta(cmd)
         return self
