@@ -14,10 +14,10 @@ Five layers, one library:
 | Layer | Command | What it does |
 |-------|---------|--------------|
 | Python library | `import visor.adb` | Quest-aware ADB wrapper: devices, apps, capture, logs, performance |
-| MCP server | `visor-mcp` | 32 `quest_*` tools for any MCP client — screenshots the model can *see*, crash logs, perf monitoring — plus 23 `xr_*` tools that let it play VR apps in the virtual headset |
+| MCP server | `visor-mcp` | 32 `quest_*` tools for any MCP client — screenshots the model can *see*, crash logs, perf monitoring — plus 25 `xr_*` tools that let it play (and talk to) VR apps in the virtual headset |
 | CLI | `visor` | MQDH-like functionality from the terminal |
 | Web dashboard | `visor ui` | Live instrument panel: perf charts, viewport, logs, app/file management — and a SIMULATOR you can drive with mouse and keyboard |
-| Virtual headset | `visor sim` | Run OpenXR apps headless in a simulated Quest 3; drive, step, record, replay, playtest, run 20 at once |
+| Virtual headset | `visor sim` | Run OpenXR apps headless in a simulated Quest 3; drive, talk to, step, record, replay, playtest, run 20 at once |
 
 ## Requirements
 
@@ -124,7 +124,7 @@ Then ask your assistant things like:
 
 Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_app_memory`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_perf_session`, `quest_perf_diff`, `quest_launch_benchmark`, `quest_trace`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`, `quest_list_builds`, `quest_audit_build`, `quest_upload_build`.
 
-Virtual headset (see [below](#virtual-headset)): `xr_launch`, `xr_list`, `xr_stop`, `xr_screenshot`, `xr_actions`, `xr_click`, `xr_point`, `xr_press`, `xr_hold`, `xr_stick`, `xr_look`, `xr_walk`, `xr_move_hand`, `xr_press_action`, `xr_pause`, `xr_resume`, `xr_step`, `xr_stats`, `xr_events`, `xr_system_event`, `xr_logs`, `xr_record`, `xr_replay`.
+Virtual headset (see [below](#virtual-headset)): `xr_launch`, `xr_list`, `xr_stop`, `xr_screenshot`, `xr_actions`, `xr_click`, `xr_point`, `xr_press`, `xr_hold`, `xr_stick`, `xr_look`, `xr_walk`, `xr_move_hand`, `xr_press_action`, `xr_pause`, `xr_resume`, `xr_step`, `xr_stats`, `xr_events`, `xr_system_event`, `xr_logs`, `xr_record`, `xr_replay`, `xr_say`, `xr_mic`.
 
 ## Virtual headset
 
@@ -149,11 +149,25 @@ visor sim record -t 20 --script run.json          # MP4 + a replay of every inpu
 visor sim replay run.json                         # play the inputs back, frame for frame
 ```
 
-Or open `visor ui` → **SIMULATOR**: the live view, where dragging looks around and clicking presses what's under the cursor (shift-click for the left hand, W A S D to walk, space for the trigger), both controllers with draggable thumbsticks, pause/step, the app's haptics as they happen, and its bound controls lighting up.
+Or open `visor ui` → **SIMULATOR**: the live view, where dragging looks around and clicking presses what's under the cursor (shift-click for the left hand, W A S D to walk, space for the trigger), both controllers with draggable thumbsticks, pause/step, a voice box, the app's haptics as they happen, and its bound controls lighting up.
+
+### Talking to it
+
+Every app in the virtual headset gets its own microphone, and hears only what Visor says to it — never this computer's mic (unless you launch with `--mic`).
+
+```bash
+pip install 'visor-dev[voice]'                    # offline text-to-speech (Piper); voices download on first use
+visor sim say "Hello! Can you hear me?"           # speak into the app's microphone
+visor sim say "Hola, ¿me oyes?" --lang es         # 17 languages built in; any Piper voice with --voice
+visor sim say --file answer.wav                   # or play a recording
+visor sim mic                                     # is the app listening? what has it heard?
+```
+
+The microphone is a small PulseAudio server per app (`PULSE_SERVER`), so anything that records through PulseAudio hears it with no changes to the app — tested with libpulse and `pa_simple`, SDL 2, and ALSA's `pulse` device. (ALSA's *default* device on a PipeWire desktop goes to PipeWire instead, which apps in the simulator can't reach.) The server has speakers too, which play into silence at real-time pace: engines open sound output and input through one driver, and some won't start without both. It speaks at a normal voice's level over a quiet room's noise floor (`--volume 0.35` is a soft voice), and its clock follows the world: while the app is paused, so is the microphone, and a line said meanwhile starts when the world runs again. In playtests the agents talk too (`say`), the **soft-spoken** persona is genuinely quiet, every line is kept with the report, and `repro.sh` replays them at the frames they were spoken.
 
 ### AI agents play it
 
-Every `xr_*` MCP tool returns what the headset sees after the action, and the pixel coordinates in that image are what `xr_click` takes — so an assistant can play a VR app the way it would use a web page. Ask Claude Code things like *"launch my project in the virtual headset and get through onboarding; tell me where you got stuck"*. `xr_pause` stops the world between turns, so slow thinking costs nothing.
+Every `xr_*` MCP tool returns what the headset sees after the action, and the pixel coordinates in that image are what `xr_click` takes — so an assistant can play a VR app the way it would use a web page, and `xr_say` lets it answer out loud. Ask Claude Code things like *"launch my project in the virtual headset and get through onboarding; tell me where you got stuck"*. `xr_pause` stops the world between turns, so slow thinking costs nothing.
 
 ### Playtests
 
@@ -163,10 +177,10 @@ visor sim playtest demo --brain monkey --persona speedrunner --seed 7   # model-
 visor sim personas
 ```
 
-A playtester is Claude (`claude-opus-5-5`, needs `ANTHROPIC_API_KEY`) in character — a **first-timer** who doesn't read instructions, a **speedrunner** hunting soft-locks, a **seated** player who can't reach high shelves (the eye height and reach are enforced, not role-played), a **motion-sensitive** player, a **one-handed** player, a **thorough explorer** — or a seeded **monkey** that costs nothing. Alongside what the agent reports, the run watches for what's measurably wrong: crashes, frozen screens, black screens, input that stops doing anything, errors in the app's log, and frame rate below the display's. Each run writes, under `~/.local/share/visor/xr/runs/<name>/`:
+A playtester is Claude (`claude-opus-5-5`, needs `ANTHROPIC_API_KEY`) in character — a **first-timer** who doesn't read instructions, a **speedrunner** hunting soft-locks, a **seated** player who can't reach high shelves (the eye height and reach are enforced, not role-played), a **motion-sensitive** player, a **one-handed** player, a **soft-spoken** player whose voice really is quiet, a **thorough explorer** — or a seeded **monkey** that costs nothing. Alongside what the agent reports, the run watches for what's measurably wrong: crashes, frozen screens, black screens, input that stops doing anything, errors in the app's log, and frame rate below the display's. Each run writes, under `~/.local/share/visor/xr/runs/<name>/`:
 
-- `report.html` — every issue with its screenshot and the actions before it, the verdict, the frame-time chart, every step
-- `repro.sh` — relaunches the app frozen and replays every input at the same frame (Unreal runs with a fixed timestep, so game time lines up too)
+- `report.html` — every issue with its screenshot and the actions before it, the verdict, the frame-time chart, every step (and every spoken line, playable)
+- `repro.sh` — relaunches the app frozen and replays every input and spoken line at the same frame (Unreal runs with a fixed timestep, so game time lines up too)
 - `video.mp4`, `frames.json` (per-frame timing), `app.log`, and the engine's crash report if there was one
 
 The dashboard's **PLAYTESTS** page runs them and keeps the reports.
@@ -186,20 +200,23 @@ Each copy is its own runtime, socket and frame buffer, so they don't share anyth
 your app ──► OpenXR loader ──► Visor layer ──────────► Monado (in-process)
  (unchanged)                    poses, buttons,         null compositor shaped like a Quest 3:
                                 actions, pause/step,    72/80/90/120 Hz, 1680×1760 per eye,
-                                events, control socket  frames copied out to shared memory
-                                        ▲                           │
-                         visor sim / visor ui / visor-mcp ◄─────────┘
+    │                           events, control socket  frames copied out to shared memory
+    │ libpulse                          ▲                           │
+    ▼                    visor sim / visor ui / visor-mcp ◄─────────┘
+Visor microphone ◄──────────────────────┘
+ (one per app: speech, recordings, room tone)
 ```
 
 - **The layer** (`native/layer`, C++) is an OpenXR API layer: it answers `xrLocateViews`/`xrLocateSpace` from a virtual body, picks the Touch interaction profile, resolves every action the app defined against its own bindings, and gates `xrWaitFrame` for pause/step. It works over any OpenXR runtime, so it can drive a real headset's runtime too (`VISOR_XR_MODE=observe` watches without driving).
 - **The runtime** is [Monado](https://monado.freedesktop.org) built in-process with a small patch (`native/monado`): Quest-shaped refresh rates and eye buffers, and frames copied out compositor-side, so capturing never touches the app's GPU queue.
+- **The microphone** (`visor/xr/pulse.py`, `mic.py`) serves just enough of PulseAudio's native protocol for one microphone and one pair of silent speakers, on a socket only that app is pointed at; PipeWire is out of the app's reach too.
 - **Determinism**: inputs are applied at frame boundaries and recorded by frame number, so a recording replays to the same picture.
 
 ### Limits, for now
 
 - Desktop Linux, Vulkan apps (Unreal and Godot default to Vulkan; Unity with the Vulkan graphics API). OpenGL apps can be driven but not watched.
 - Android APKs don't run here — the same project built for Linux (or its `.uproject`) does. On a real Quest, the OpenXR loader bundled in Unreal APKs looks for layers in the APK's own `assets/openxr/1/api_layers/`, so a dev build can carry the layer without root; that path isn't built yet.
-- Apps hear no microphone unless you pass `--mic` (then they hear yours); there's no synthetic speech input yet.
+- The app's own sound isn't heard yet: Unreal runs with `-nosound`, and what other apps play goes into silence, so agents can speak but not listen.
 
 ## Publishing to the Meta Horizon Store
 
