@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import struct
 import sys
@@ -59,6 +60,7 @@ class FakeLayer:
     def close(self):
         self._stop = True
         self._srv.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
 
 
 def write_frame_buffer(name: str, image: Image.Image, seq: int = 1, frame: int = 42, eyes: int = 1,
