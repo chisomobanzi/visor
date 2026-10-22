@@ -123,6 +123,31 @@ textarea {
 .said .empty { display: block; color: var(--faint); cursor: default; }
 .said li.rec { cursor: default; color: var(--muted); }
 .voice.off .sayrow, .voice.off .sayopts { opacity: .45; pointer-events: none; }
+/* the conversation: you on the right, the app (heard and written out) on the left */
+.voicehead { display: inline-flex; align-items: center; gap: 10px; }
+.speaker { display: inline-flex; align-items: center; gap: 6px; padding: 3px 7px; border-radius: 6px;
+  border: 1px solid var(--line); background: transparent; color: var(--faint); cursor: pointer; }
+.speaker svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.speaker svg path:first-child { fill: currentColor; stroke: none; }
+.speaker .w1, .speaker .w2 { opacity: .25; transition: opacity .2s; }
+.speaker.playing { color: var(--lens); }
+.speaker.playing .w1 { opacity: 1; }
+.speaker.loud .w2 { opacity: 1; }
+.speaker[aria-pressed="true"] { border-color: rgba(107,203,223,.55); background: rgba(107,203,223,.1); color: var(--lens); }
+.speaker:focus-visible { outline: 2px solid var(--lens); outline-offset: 2px; }
+.meter { width: 28px; height: 4px; border-radius: 2px; background: var(--raised); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: currentColor; transition: width .25s; }
+.said li.you { grid-template-columns: 1fr auto; text-align: right; }
+.said li.you q { order: 0; }
+.said li.app { grid-template-columns: auto 1fr auto; cursor: default; text-align: left; }
+.said li.app .ic { color: var(--lens); font-size: 11px; line-height: 1.5; }
+.said li.app .txt { color: #bfe8f1; }
+.said li.app.ambient .txt, .said li.app.ambient .ic { color: var(--muted); font-style: italic; }
+.said li.app .lang { font-family: var(--mono); font-size: 9.5px; color: var(--lens); border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 4px; margin-left: 6px; font-style: normal; }
+.said .replay { border: 0; background: none; padding: 0 0 0 6px; color: var(--faint); cursor: pointer; font-size: 10px; }
+.said .replay:hover, .said .replay:focus-visible { color: var(--lens); }
+.said .end { display: inline-flex; align-items: baseline; gap: 2px; }
 
 /* ---------- side panel ---------- */
 .sim-side { display: flex; flex-direction: column; gap: 12px; }

@@ -389,6 +389,126 @@ def mic_status(name: str):
         return {"available": False, "reason": str(e)}
 
 
+class _Captions:
+    """Listens to one app for the dashboard, in the background: what it says,
+    written out, with the sound kept for replay. Viewers poll what's new; it
+    stops a minute after the last one stops looking."""
+
+    KEEP = 60
+
+    def __init__(self, name: str):
+        from visor.xr.hearing import Ears
+
+        self.name = name
+        xr = _client(name)
+        self.mic = xr.mic()
+        self.ears = Ears(self.mic, since=time.monotonic() - 20.0)
+        self.entries: list[dict] = []
+        self.clips: dict[int, bytes] = {}
+        self.seq = 0
+        self.polled = time.time()
+        self.error: Optional[str] = None
+        self.lock = threading.Lock()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        from visor.xr.hearing import HearingError
+        from visor.xr.mic import MicError
+
+        while time.time() - self.polled < 60:
+            try:
+                heard = self.ears.hear(settle=True)
+            except (MicError, HearingError, OSError) as e:
+                self.error = str(e)
+                break
+            if not heard.silent:
+                clip = heard.wav()
+                with self.lock:
+                    self.seq += 1
+                    self.entries.append({
+                        "seq": self.seq, "at": time.time() - (time.monotonic() - heard.end),
+                        "text": heard.describe(), "said": " ".join(x.text for x in heard.lines),
+                        "language": heard.language, "background": heard.background_change,
+                        "sounds": sum(1 for s in heard.sounds if not s.speech),
+                        "seconds": round(heard.end - heard.start, 1),
+                    })
+                    self.clips[self.seq] = clip
+                    self.entries = self.entries[-self.KEEP:]
+                    for old in [k for k in self.clips if k <= self.seq - 20]:
+                        del self.clips[old]
+            time.sleep(0.7)
+        with _lock:
+            if _captions.get(self.name) is self:
+                del _captions[self.name]
+
+    def since(self, seq: int) -> list[dict]:
+        self.polled = time.time()
+        with self.lock:
+            return [e for e in self.entries if e["seq"] > seq]
+
+
+_captions: dict[str, _Captions] = {}
+
+
+@router.get("/{name}/heard")
+def heard(name: str, since: int = 0):
+    """What the app has said and played (written out), after ``since``."""
+    from visor.xr import hearing
+    from visor.xr.mic import MicError
+
+    with _lock:
+        cap = _captions.get(name)
+        if cap is None:
+            try:
+                cap = _captions[name] = _Captions(name)
+            except MicError as e:
+                return {"available": False, "reason": str(e), "entries": []}
+    try:
+        speakers = cap.mic.speakers()
+    except MicError:
+        speakers = {}
+    return {"available": cap.error is None, "reason": cap.error, "words": hearing.available(),
+            "entries": cap.since(since), "speakers": speakers}
+
+
+@router.get("/{name}/heard/{seq}.wav")
+def heard_clip(name: str, seq: int):
+    cap = _captions.get(name)
+    data = cap.clips.get(seq) if cap else None
+    if data is None:
+        raise HTTPException(404, "that sound is no longer kept")
+    return Response(data, media_type="audio/wav", headers={"Cache-Control": "max-age=3600"})
+
+
+@router.get("/{name}/listen")
+async def listen(name: str):
+    """The app's sound, live: 16 kHz mono 16-bit PCM, for the page to play."""
+    from visor.xr.mic import MicError, pcm16
+
+    mic = _client(name).mic()
+
+    async def gen():
+        cursor = time.monotonic() - 0.2
+        quiet = 0
+        try:
+            while quiet < 300:  # 30 s without the app answering: it's gone
+                await asyncio.sleep(0.1)
+                try:
+                    r = await asyncio.to_thread(mic.heard, cursor, time.monotonic() - 0.05)
+                except (MicError, OSError):
+                    quiet += 1
+                    continue
+                quiet = 0
+                cursor = r["to"]
+                if len(r["samples"]):
+                    yield pcm16(r["samples"])
+        finally:
+            mic.close()
+
+    return StreamingResponse(gen(), media_type="application/octet-stream",
+                             headers={"Cache-Control": "no-store", "X-Sample-Rate": "16000"})
+
+
 class Say(BaseModel):
     text: str
     language: Optional[str] = None

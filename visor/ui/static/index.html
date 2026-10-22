@@ -685,7 +685,16 @@
             </div>
           </div>
           <div class="card voice" id="sim-voice">
-            <h3 class="mini"><span>Voice</span><span class="micstate" id="sim-micstate" role="status"><i></i><b>—</b></span></h3>
+            <h3 class="mini"><span>Voice</span>
+              <span class="voicehead">
+                <span class="micstate" id="sim-micstate" role="status"><i></i><b>—</b></span>
+                <button type="button" class="speaker" id="sim-speaker" aria-pressed="false"
+                        title="Hear the app's sound here (it plays nowhere else)">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z"/><path class="w1" d="M11 5.5a3.5 3.5 0 0 1 0 5"/><path class="w2" d="M12.8 3.6a6 6 0 0 1 0 8.8"/></svg>
+                  <span class="meter" id="sim-meter"><i></i></span>
+                </button>
+              </span>
+            </h3>
             <form class="sayrow" id="sim-say-form" autocomplete="off">
               <input id="sim-say" maxlength="400" placeholder="Say something to the app…" aria-label="What to say into the headset's microphone"
                      data-1p-ignore data-lpignore="true" data-bwignore spellcheck="true">
@@ -699,7 +708,7 @@
                 <button type="button" role="radio" data-vol="2" aria-checked="false" title="Raised voice">loud</button>
               </div>
             </div>
-            <ol class="said" id="sim-said"><li class="empty">The app hears only what you say here — never this computer's microphone.</li></ol>
+            <ol class="said" id="sim-said" aria-live="polite"><li class="empty">The app hears only what you say here — never this computer's microphone. What it says back appears here too.</li></ol>
           </div>
           <div class="card">
             <h3 class="mini"><span>Session</span><span id="sim-app-name"></span></h3>

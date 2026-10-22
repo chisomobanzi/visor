@@ -48,6 +48,8 @@
   function select(name) {
     if (S.current === name && S.streamKey === name) return;
     S.current = name; S.events = 0; S.fpsHistory = []; S.saidCount = -1;
+    S.mine = []; S.theirs = []; S.heardSeq = 0; listenLive(false);
+    $("#sim-said").innerHTML = '<li class="empty">The app hears only what you say here — never this computer\'s microphone. What it says back appears here too.</li>';
     $("#sim-feed").innerHTML = '<li class="empty">Haptic pulses and session changes show up here.</li>';
     $("#sim-stage").hidden = false; $("#sim-empty").hidden = true;
     startStream(); loadInfo(); pollMic(); renderTabs();
@@ -494,25 +496,107 @@
     el.title = st.listening ? `the app has its microphone open (${st.streams.map(s => `${s.rate} Hz × ${s.channels}`).join(", ")})`
       : "the app hasn't opened its microphone, so it can't hear you right now";
   }
-  function renderSaid(history) {
-    if (!history.length) return;
-    $("#sim-said").innerHTML = history.slice().reverse().map(h => {
-      const when = `${h.duration.toFixed(1)}s · ${new Date(h.at * 1000).toLocaleTimeString([], { hour12: false })}`;
-      return h.kind === "speech"
-        ? `<li data-text="${esc(h.label)}" title="Say it again"><q>${esc(h.label)}</q><small>${when}</small></li>`
-        : `<li class="rec"><span>♪ ${esc(h.label || "recording")}</span><small>${when}</small></li>`;
-    }).join("");
+  // The conversation: what you said (from the mic's history) and what the app said back
+  // (written out by the server's ears), in time order.
+  S.mine = []; S.theirs = []; S.heardSeq = 0;
+  const clock2 = (at) => new Date(at * 1000).toLocaleTimeString([], { hour12: false });
+  function renderSaid() {
+    const rows = [
+      ...S.mine.map(h => ({ at: h.at, html: h.kind === "speech"
+        ? `<li class="you" data-text="${esc(h.label)}" title="Say it again"><q>${esc(h.label)}</q><small>${h.duration.toFixed(1)}s · ${clock2(h.at)}</small></li>`
+        : `<li class="you rec"><span>♪ ${esc(h.label || "recording")}</span><small>${h.duration.toFixed(1)}s · ${clock2(h.at)}</small></li>` })),
+      ...S.theirs.map(e => {
+        const lang = e.language && e.language !== "en" ? `<span class="lang">${esc(e.language)}</span>` : "";
+        const ambient = !e.said;
+        const body = e.said ? `“${esc(e.said)}”${lang}` : esc(e.text);
+        const clip = `<button type="button" class="replay" data-seq="${e.seq}" title="Hear it again" aria-label="Hear it again">▶</button>`;
+        return { at: e.at, html: `<li class="app${ambient ? " ambient" : ""}"><span class="ic">🔊</span><span class="txt">${body}</span>`
+          + `<span class="end"><small>${clock2(e.at)}</small>${clip}</span></li>` };
+      }),
+    ].sort((a, b) => b.at - a.at);
+    if (!rows.length) return;
+    $("#sim-said").innerHTML = rows.slice(0, 60).map(r => r.html).join("");
   }
   async function pollMic() {
     if (!S.current || !active()) return;
     try {
       const st = await api(xr("/mic"));
       micLabel(st);
+      speakerLabel(st.speakers);
       $("#sim-voice").classList.toggle("off", !st.available || !S.voicesReady);
-      if (st.available && st.history.length !== S.saidCount) { S.saidCount = st.history.length; renderSaid(st.history); }
+      if (st.available && st.history.length !== S.saidCount) { S.saidCount = st.history.length; S.mine = st.history; renderSaid(); }
       if (!st.available) $("#sim-said").innerHTML = `<li class="empty">${esc(st.reason)}</li>`;
     } catch (e) { /* app gone: the tab bar handles it */ }
   }
+  async function pollHeard() {
+    if (!S.current || !active()) return;
+    const name = S.current;
+    try {
+      const r = await api(`${xr("/heard")}?since=${S.heardSeq}`);
+      if (name !== S.current) return;
+      if (r.entries?.length) {
+        S.theirs = [...S.theirs, ...r.entries].slice(-40);
+        S.heardSeq = r.entries[r.entries.length - 1].seq;
+        renderSaid();
+      }
+      if (r.speakers) speakerLabel(r.speakers);
+    } catch (e) { /* the next poll will tell */ }
+  }
+  function speakerLabel(sp) {
+    const b = $("#sim-speaker");
+    if (!sp) return;
+    const db = sp.playing ? sp.level_db : -120;
+    const share = Math.max(0, Math.min(1, (db + 60) / 50));
+    b.classList.toggle("playing", !!sp.playing);
+    b.classList.toggle("loud", db > -24);
+    $("#sim-meter i").style.width = `${Math.round(share * 100)}%`;
+    const listening = b.getAttribute("aria-pressed") === "true";
+    b.title = (sp.open ? (sp.playing ? `playing sound (${Math.round(db)} dB)` : "speakers open, quiet") : "no sound yet")
+      + (listening ? " — click to stop hearing it here" : " — click to hear it here (it plays nowhere else)");
+  }
+  $("#sim-said").addEventListener("click", (e) => {
+    const b = e.target.closest(".replay");
+    if (!b) return;
+    e.stopPropagation();
+    new Audio(`${xr("/heard")}/${b.dataset.seq}.wav`).play().catch(() => toast("That sound is no longer kept."));
+  });
+
+  // Hearing the app live: raw 16 kHz PCM streamed from the server, scheduled gap-free with Web Audio.
+  S.live = null;
+  async function listenLive(on) {
+    const b = $("#sim-speaker");
+    if (S.live) { S.live.abort.abort(); S.live.ctx.close(); S.live = null; }
+    b.setAttribute("aria-pressed", String(on));
+    if (!on || !S.current) return;
+    const ctx = new AudioContext();
+    const abort = new AbortController();
+    S.live = { ctx, abort };
+    let at = 0, carry = new Uint8Array(0);
+    try {
+      const res = await fetch(xr("/listen"), { signal: abort.signal });
+      const reader = res.body.getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const bytes = new Uint8Array(carry.length + value.length);
+        bytes.set(carry); bytes.set(value, carry.length);
+        const n = bytes.length >> 1;
+        carry = bytes.slice(n * 2);
+        if (!n) continue;
+        const pcm = new Int16Array(bytes.buffer.slice(0, n * 2));
+        const buf = ctx.createBuffer(1, n, 16000);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < n; i++) ch[i] = pcm[i] / 32768;
+        const src = ctx.createBufferSource();
+        src.buffer = buf; src.connect(ctx.destination);
+        at = Math.max(at, ctx.currentTime + 0.15);  // a little latency buys a gap-free stream
+        src.start(at); at += buf.duration;
+      }
+    } catch (e) { if (e.name !== "AbortError") toast("Lost the app's sound."); }
+    if (S.live && S.live.abort === abort) { b.setAttribute("aria-pressed", "false"); S.live = null; ctx.close(); }
+  }
+  $("#sim-speaker").addEventListener("click", () => listenLive($("#sim-speaker").getAttribute("aria-pressed") !== "true"));
+
   async function sayIt(text) {
     text = (text || "").trim();
     if (!text || !S.current) return;
@@ -551,6 +635,7 @@
       if (id === "playtests") loadReports();
     } else if (S.streamKey) {
       stopStream();  // don't keep a stream running in the background
+      listenLive(false);
     }
   }
   window.addEventListener("hashchange", onRoute);
@@ -559,5 +644,6 @@
   setInterval(poll, 700);
   setInterval(() => { if (active()) loadInfo(); }, 1200);
   setInterval(pollMic, 900);
+  setInterval(pollHeard, 1200);
   setInterval(pollPlaytest, 1000);
 })();
