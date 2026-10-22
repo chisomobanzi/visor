@@ -245,6 +245,7 @@ Your body: eyes {p.eye_height:.2f} m above the floor, {hands}, you turn at most 
 - Pixel coordinates for click/point always refer to the latest screenshot. To press UI, click the middle of the button. If the laser lands off target, point first and adjust.
 - The app's own controls (what it bound to each button) are below — use them to know what buttons do.
 - You can talk: say speaks into the headset's microphone{'' if p.voice_volume >= 0.8 else ' (quietly — that is your voice)'}. When the app asks you to speak, answer out loud rather than looking for a button. You'll be told whether the app was listening.
+- You can hear: what the app says is written out after each action ("You heard the app say: …"), and other sounds are described. The world runs on until it has finished talking. Speech recognition can mishear names; trust what you see when they disagree. Sound problems count too: no sound where you'd expect it, a voice you can't make out, audio that cuts off or distorts.
 - Report every problem as soon as you notice it with report_issue: bugs, confusion, discomfort, accessibility barriers, visual or text problems, slowness. Be specific and honest; minor things count. Don't report the same thing twice.
 - You have {ctx.max_steps} actions. If you've been stuck for about {p.patience_steps} actions, report it and try another way; if nothing works, finish.
 - When the goal is done or you can't continue, call finish with your verdict.

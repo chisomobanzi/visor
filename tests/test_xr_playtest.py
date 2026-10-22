@@ -233,5 +233,52 @@ def test_mcp_registers_xr_tools():
     assert {"xr_launch", "xr_screenshot", "xr_click", "xr_press", "xr_step", "xr_pause", "xr_say", "xr_mic"} <= names
 
 
+class TestPlaytestHearing:
+    def test_the_agent_is_told_and_the_sound_is_kept(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        from array import array
+
+        from visor.xr.hearing import Heard, Line, Sound
+        from visor.xr.playtest.session import Playtest, PlaytestConfig, StepRecord
+
+        t = Playtest(PlaytestConfig(target="demo", brain="monkey"), brain=MonkeyBrain())
+        t.dir.mkdir(parents=True)
+
+        class FakeEars:
+            def hear(self, wait=0.0, step=None, expect=0.0):
+                return Heard(start=0, end=2, sounds=[Sound(0.5, 1.5, -6, True)], lines=[Line(0.5, 1.5, "Hello!", "en")],
+                             transcribed=True, clipped=0.01, samples=array("f", [0.1] * 1600))
+
+        class FakeXr:
+            def state(self):
+                return {"render_frame": 99}
+
+        t.xr, t.ears = FakeXr(), FakeEars()
+        t.steps.append(StepRecord(step=1, frame=90, action="press", args={}, thought="", result="ok", screenshot="",
+                                  t=0.0))
+        note = t._listen(1)
+        assert note == ' You heard the app say: "Hello!" The audio was distorted: 1.0% of it clipped at full volume.'
+        assert t.steps[-1].heard_audio == "heard/001.wav" and (t.dir / "heard/001.wav").exists()
+        assert t.heard[0]["said"] == "Hello!" and t.heard[0]["frame"] == 99
+        assert [i.category for i in t.issues] == ["audio"]
+
+
+def test_report_shows_what_the_app_said(tmp_path):
+    from visor.xr.playtest.report import write_html
+
+    report = {
+        "name": "pt", "created": "2026-10-22T10:00:00", "duration_s": 30, "app": {"name": "Game"},
+        "persona": {"name": "First-timer", "tagline": "new"}, "goal": "play", "brain": {"kind": "monkey"},
+        "config": {"video": False}, "verdict": {}, "issues": [], "perf": {}, "artifacts": {},
+        "steps": [{"step": 1, "frame": 10, "action": "press", "args": {}, "thought": "", "t": 0, "result": "ok",
+                   "screenshot": "shots/001.jpg", "heard": 'You heard the app say: "<Hola>"',
+                   "heard_audio": "heard/001.wav"}],
+        "heard": [{"step": 1, "said": "<Hola>", "language": "es", "audio": "heard/001.wav"}],
+    }
+    html = write_html(report, tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "What the app said" in html and "<q>&lt;Hola&gt;</q>" in html and '<span class="lang">es</span>' in html
+    assert html.count('src="heard/001.wav"') == 2 and "recording was off" in html
+
+
 def test_call_dataclass_defaults():
     assert Call("wait", {"seconds": 1}).id == ""

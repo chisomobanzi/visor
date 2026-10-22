@@ -201,6 +201,7 @@ class SimInstance:
         self.proc: Optional[subprocess.Popen] = None
         self.mic_proc: Optional[subprocess.Popen] = None
         self.started_at: Optional[float] = None
+        self.started_clock: Optional[float] = None  # the same moment on the monotonic clock
         self.notes: list[str] = []  # things that didn't work out but didn't stop the launch
         self._client: Optional[XrClient] = None
         self._log = None
@@ -301,6 +302,7 @@ class SimInstance:
                 os.close(stdin)
         _first_to_go(self.proc.pid)
         self.started_at = time.time()
+        self.started_clock = time.monotonic()
         self._write_meta(cmd)
         return self
 

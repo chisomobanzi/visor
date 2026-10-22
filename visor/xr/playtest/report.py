@@ -18,6 +18,10 @@ def _e(text) -> str:
     return html.escape(str(text if text is not None else ""))
 
 
+def _audio(src: Optional[str]) -> str:
+    return f'<audio controls preload="none" src="{_e(src)}"></audio>' if src else ""
+
+
 def _frame_chart(frames_path: Path, refresh_hz: float, paused: Optional[list] = None) -> str:
     """Frame-interval sparkline (ms) of the real-time stretches of the run."""
     try:
@@ -110,10 +114,22 @@ def write_html(report: dict, out: Path) -> Path:
         thought = f'<p class="thought">“{_e(s["thought"][:320])}”</p>' if s.get("thought") else ""
         said = (f'<p class="said"><span>🗣</span> “{_e(s["args"].get("text", ""))}”'
                 f'<audio controls preload="none" src="{_e(s["audio"])}"></audio></p>') if s.get("audio") else ""
+        heard = (f'<p class="heard"><span>🔊</span> {_e(s["heard"])}'
+                 f'{_audio(s.get("heard_audio"))}</p>') if s.get("heard") else ""
         film.append(f"""
         <li><a href="{_e(s.get('screenshot') or '#')}" target="_blank">{thumb}</a>
           <div><b>{s['step']}. {_e(s['action'])}</b> <code>{_e(json.dumps(s['args']))}</code>
-          {said}<p>{_e(s['result'])}</p>{thought}</div></li>""")
+          {said}<p>{_e(s['result'])}</p>{heard}{thought}</div></li>""")
+
+    # Everything the app said, as a script.
+    script = []
+    for h in report.get("heard") or []:
+        if h.get("said"):
+            lang = f' <span class="lang">{_e(h["language"])}</span>' if h.get("language") not in (None, "en") else ""
+            script.append(f'<li><span class="when">step {h["step"]}</span><q>{_e(h["said"])}</q>{lang}'
+                          f'{_audio(h.get("audio"))}</li>')
+    heard_html = (f'<section><h2>What the app said</h2><ol class="script">{"".join(script)}</ol></section>'
+                  if script else "")
 
     crash = report.get("crash")
     crash_html = ""
@@ -128,8 +144,10 @@ def write_html(report: dict, out: Path) -> Path:
     brain_line = (f"{_e(brain.get('model') or brain.get('kind'))} · {brain.get('requests', 0)} requests"
                   f"{f' · ≈ ${cost:.2f}' if cost is not None else ''}") if brain.get("kind") == "claude" \
         else f"scripted monkey · seed {brain.get('seed', 0)}"
+    no_video = ("No video: recording was off for this run." if (report.get("config") or {}).get("video") is False
+                else "No video (ffmpeg not found).")
     video = f'<video controls preload="metadata" src="{_e(arts["video"])}"></video>' if arts.get("video") else \
-        '<p class="muted">No video (ffmpeg not found).</p>'
+        f'<p class="muted">{no_video}</p>'
     chart = _frame_chart(out.parent / arts["frames"], refresh, report.get("paused_frames")) if arts.get("frames") else ""
     verdict_cls = "good" if achieved else ("bad" if achieved is False else "")
     scripted = brain.get("kind") != "claude"
@@ -217,7 +235,14 @@ td.good {{ color: var(--good); }} td.warn {{ color: var(--warn); }} td.bad {{ co
 .film p {{ margin: 4px 0 0; color: #c9cfdb; }}
 .film .thought {{ color: var(--muted); font-style: italic; }}
 .film .said {{ display:flex; flex-wrap: wrap; align-items:center; gap: 6px 12px; color: var(--ink); font-size: 15px; }}
-.film .said audio {{ height: 30px; max-width: 100%; }}
+.film audio, .script audio {{ height: 30px; max-width: 100%; }}
+.film .heard {{ display:flex; flex-wrap: wrap; align-items:center; gap: 6px 12px; color: var(--lens); }}
+.script {{ list-style:none; padding:0; margin:0; display:grid; gap: 8px; }}
+.script li {{ display:flex; flex-wrap: wrap; align-items:center; gap: 6px 14px; background: var(--surface);
+  border:1px solid var(--line); border-radius: 12px; padding: 10px 14px; }}
+.script .when {{ font: 12px var(--mono); color: var(--muted); min-width: 52px; }}
+.script q {{ flex: 1 1 320px; font-size: 15px; }}
+.script .lang {{ font: 11px var(--mono); color: var(--lens); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }}
 .crash {{ background: color-mix(in srgb, var(--bad) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line));
   border-radius: 14px; padding: 16px; }}
 .crash pre {{ overflow:auto; max-height: 360px; background: #0c0f13; padding: 12px; border-radius: 9px; }}
@@ -264,6 +289,7 @@ footer.page {{ margin-top: 54px; color: var(--faint); font-size: 12.5px; }}
     <table><thead><tr><th>window</th><th>fps</th><th>p50 ms</th><th>p95 ms</th><th>p99 ms</th><th>cpu ms</th><th>missed</th></tr></thead>
     <tbody>{_perf_row('idle at start', perf.get('start'))}{_perf_row('after playing', perf.get('end'))}</tbody></table>
   </section>
+  {heard_html}
   <section><h2>Every action</h2><ol class="film">{''.join(film)}</ol></section>
   <footer class="page">{_e(report.get('name'))} · {_e(report['app'].get('runtime'))} · {_e(report['app'].get('interaction_profile'))}
     · <a href="report.json">report.json</a> · <a href="app.log">app.log</a></footer>

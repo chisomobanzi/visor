@@ -30,6 +30,7 @@ from visor.xr import paths
 from visor.xr import voice as tts
 from visor.xr.client import XrClient, XrError, qrot
 from visor.xr.frames import FrameError, FrameReader
+from visor.xr.hearing import Ears, HearingError
 from visor.xr.mic import MicError
 from visor.xr.playtest.brains import (ACTION_TOOLS, Brain, BrainContext, Call, Observation, describe_controls,
                                       make_brain)
@@ -38,7 +39,9 @@ from visor.xr.playtest.personas import Persona, get_persona
 from visor.xr.sim import AppSpec, SimConfig, SimError, SimInstance, detect_crash
 
 FPS = 72
-DEFAULT_GOAL = ("Start the experience as a new player would and get as far as you can through it, "
+LISTEN_WAIT = 12.0  # seconds of world time to let the app finish talking before each look
+LISTEN_EXPECT = 1.5  # after an action, how long a reply gets to begin
+DEFAULT_GOAL =("Start the experience as a new player would and get as far as you can through it, "
                 "noting everything that gets in your way.")
 
 
@@ -59,6 +62,7 @@ class PlaytestConfig:
     warmup_seconds: float = 8.0
     view_width: int = 1024
     video: bool = True
+    hearing: bool = True  # tell the agent what the app plays (speech transcribed, other sounds described)
     name: Optional[str] = None
 
 
@@ -73,6 +77,8 @@ class StepRecord:
     screenshot: str
     t: float
     audio: str = ""  # what was said, for `say` steps (a WAV in the run dir)
+    heard: str = ""  # what the app played afterwards, as the agent was told it
+    heard_audio: str = ""  # and the sound itself (a WAV in the run dir)
 
 
 class TimeLapse:
@@ -156,6 +162,8 @@ class Playtest:
         self.sim: Optional[SimInstance] = None
         self.xr: Optional[XrClient] = None
         self.voice_events: list[dict] = []  # what was said, at which frame: replayed with the inputs
+        self.heard: list[dict] = []  # what the app played, step by step
+        self.ears: Optional[Ears] = None
         self._listening: Optional[bool] = None
         self._said = ""
         self._log_offset = 0
@@ -295,7 +303,37 @@ class Playtest:
             return " The app's microphone is on: it's listening."
         return "" if before is None else " The app turned its microphone off."
 
+    def _listen(self, step: int) -> str:
+        """What the app played since the last look, once it has finished saying
+        it (the world runs on while it talks). Kept with the run; returns what
+        to tell the agent."""
+        if self.ears is None:
+            return ""
+        try:
+            heard = self.ears.hear(wait=LISTEN_WAIT, expect=LISTEN_EXPECT if step else 0.0,
+                                   step=lambda s: self.xr.step(max(1, round(s * FPS)), timeout=30))
+        except (MicError, HearingError) as e:
+            self._emit("status", message=f"can't hear the app: {e}")
+            self.ears = None
+            return ""
+        if heard.silent:
+            return ""
+        rel = f"heard/{len(self.heard) + 1:03d}.wav"
+        heard.save(self.dir / rel)
+        frame = int(self.xr.state().get("render_frame", 0))
+        self.heard.append({"step": step, "frame": frame, "audio": rel, **heard.to_json()})
+        if self.steps and self.steps[-1].step == step:
+            self.steps[-1].heard, self.steps[-1].heard_audio = heard.describe(), rel
+        if heard.clipped > 0.001 and not any(i.category == "audio" for i in self.issues):
+            self._add_issue(Issue(
+                title="Audio clips at full volume", severity="minor", category="audio",
+                description=f"{heard.clipped:.1%} of what the app played after step {step} was at full scale: "
+                            "it's distorted on headphones, and the Quest's speakers will crackle.",
+                step=step, frame=frame, source="oracle:audio"))
+        return " " + heard.describe()
+
     def _observe(self, step: int, text: str) -> tuple[Observation, str, int]:
+        text += self._listen(step)
         img, rel, frame = self._shot(step)
         left = self.cfg.max_steps - step
         events = self.xr.events(self._events_seen)
@@ -339,6 +377,12 @@ class Playtest:
             self._emit("status", message=note)
         self.xr = self.sim.wait_ready(timeout=600, on_progress=lambda note: self._emit("status", message=note))
         self._events_seen = 0
+        if self.cfg.hearing and self.sim.mic_proc:
+            # From launch (up to a minute back): the first look includes how the app greeted the player.
+            self.ears = Ears(self.xr.mic(), since=max(self.sim.started_clock or 0.0, time.monotonic() - 60.0),
+                             log=lambda m: self._emit("status", message=m))
+            if not self.ears.transcribe:
+                self._emit("status", message="hearing sounds but not words: pip install 'visor-dev[voice]'")
         if "right" not in p.hands:
             self.xr.set(right={"connected": False})
         if "left" not in p.hands:
@@ -369,7 +413,10 @@ class Playtest:
                            controls=describe_controls(info.get("actions", [])),
                            image_size=img.size, max_steps=self.cfg.max_steps)
         self.brain.start(ctx)
-        obs = Observation(image=img, text="This is the first thing you see." + self._mic_note(), step=0,
+        heard = self._listen(0)
+        if heard:
+            img, rel, frame = self._shot(0)  # the world may have moved on while the app talked
+        obs = Observation(image=img, text="This is the first thing you see." + heard + self._mic_note(), step=0,
                           steps_left=self.cfg.max_steps)
         calls = self.brain.first(obs)
         deadline = self.started + self.cfg.max_minutes * 60
@@ -531,6 +578,7 @@ class Playtest:
             "verdict": self.verdict,
             "issues": issues,
             "steps": [asdict(s) for s in self.steps],
+            "heard": self.heard,
             "perf": self.perf,
             # Frames in between were single-stepped by the agent, not real time.
             "paused_frames": [getattr(self, "paused_from", None), getattr(self, "paused_to", None)],
