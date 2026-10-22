@@ -1,4 +1,5 @@
-"""Visor's microphone: the timeline an app hears, its clock, and the helper."""
+"""Visor's microphone and speakers: the timeline an app hears, its clock, what it
+plays, and the helper."""
 
 import json
 import math
@@ -14,7 +15,7 @@ from array import array
 import pytest
 
 from visor.xr import mic as xr_mic
-from visor.xr.mic import GAP, LEAD, Mic, MicClient, MicError, load_audio, normalize
+from visor.xr.mic import EAR_RATE, GAP, LEAD, Mic, MicClient, MicError, Speakers, _Downsampler, load_audio, normalize
 
 
 def rms(xs):
@@ -140,6 +141,53 @@ class TestAudioFiles:
     def test_normalize_to_speaking_level(self):
         out = normalize(tone(amp=0.9), 0.1)
         assert rms(out) == pytest.approx(0.1, rel=0.05) and max(abs(v) for v in out) < 0.99
+
+
+class TestSpeakers:
+    def test_downsampling_is_seamless_across_uneven_chunks(self):
+        x = tone(1.0, rate=48000, amp=0.3)
+        d, out, i = _Downsampler(48000), [], 0
+        for n in [480, 333, 1021, 7, 960] * 100:
+            if i >= len(x):
+                break
+            out.extend(d.feed(x[i:i + n]))
+            i += n
+        expect = [0.3 * math.sin(2 * math.pi * 300 * (j * 3 + 1) / 48000) for j in range(len(out))]
+        assert len(out) == 16000 and max(abs(a - b) for a, b in zip(out, expect)) < 0.001
+
+    def test_odd_rates(self):
+        d = _Downsampler(44100)
+        y = tone(1.0, rate=44100, amp=0.3)
+        n = sum(len(d.feed(y[k:k + 441])) for k in range(0, 44100, 441))
+        assert abs(n - 16000) <= 1
+
+    def test_streams_mix_on_one_timeline(self):
+        s = Speakers(seconds=2, origin=1000.0)
+        s.played(1, 1000.10, 48000, array("f", [0.25] * 4800))
+        s.played(2, 1000.15, 48000, array("f", [0.25] * 4800))
+        start, a = s.read(1000.0, 1000.5)
+
+        def mean(t0, t1):
+            seg = a[round(t0 * EAR_RATE):round(t1 * EAR_RATE)]
+            return sum(seg) / len(seg)
+
+        assert start == 1000.0 and mean(0.0, 0.09) == 0.0
+        assert mean(0.11, 0.14) == pytest.approx(0.25) and mean(0.16, 0.19) == pytest.approx(0.5)
+        assert mean(0.26, 0.5) == 0.0  # silence after, not stale ring
+
+    def test_remembers_only_so_far_back(self):
+        s = Speakers(seconds=2, origin=1000.0)
+        s.played(1, 1000.0, 16000, array("f", [0.1] * 1600))
+        s.played(1, 1003.0, 16000, array("f", [0.5] * 1600))  # three seconds later: lapped
+        start, a = s.read(1000.0, 1003.1)
+        assert start == pytest.approx(1001.1) and max(a) == pytest.approx(0.5) and min(a) == 0.0
+
+    def test_status_tracks_a_stretch_of_sound(self):
+        s = Speakers(seconds=5, origin=1000.0)
+        s.played(1, 1001.0, 16000, array("f", [0.5] * 8000))
+        st = s.status(now=1001.6)
+        assert st["playing"] and st["sound_since"] == pytest.approx(1001.0) and st["level_db"] > -10
+        assert not s.status(now=1003.0)["playing"]
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the simulator's helper runs on Linux")

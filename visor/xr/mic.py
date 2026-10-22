@@ -1,9 +1,10 @@
-"""Visor's microphone: what an app in the virtual headset hears.
+"""Visor's microphone and ears: what an app in the virtual headset hears, and
+what it plays.
 
-Every app the simulator launches gets its own microphone — a small helper
-process serving the PulseAudio protocol (visor.xr.pulse) on a socket only that
-app is pointed at — so twenty copies can each be spoken to separately, and none
-of them can hear the room.
+Every app the simulator launches gets its own audio — a small helper process
+serving the PulseAudio protocol (visor.xr.pulse) on a socket only that app is
+pointed at — so twenty copies can each be spoken to separately, none of them
+can hear the room, and the room hears none of them.
 
 The microphone plays clips (speech from visor.xr.voice, or any audio file) on
 one timeline that every stream the app opens shares, so a sentence lands the
@@ -16,13 +17,20 @@ actions, the microphone is paused too: nothing piles up in the app's capture
 buffers, and speech queued while frozen starts when the world runs again —
 the same game time every replay.
 
+The speakers are the other way round: they run in real time, as sound cards
+do, and Visor listens to them. Everything the app plays is mixed to mono at
+16 kHz (speech recognition's native rate) and remembered for three minutes,
+to be read back by time.
+
 Control is JSON lines on ``<name>.mic`` beside the app's own socket.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import math
+import operator
 import os
 import random
 import shutil
@@ -35,6 +43,7 @@ import time
 import wave
 from array import array
 from dataclasses import dataclass
+from itertools import accumulate
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -47,6 +56,12 @@ SPEECH_RMS = 0.1  # -20 dBFS: a normal voice, close to the mic
 LEAD = 0.05  # seconds between "play" and the first sample
 GAP = 0.25  # between queued clips, like a breath
 ROOM_RATE = 48000
+
+EAR_RATE = 16000  # what Visor hears the app's speakers at
+EAR_SECONDS = 180  # how much of it the helper remembers
+EAR_BLOCK = 800  # 50 ms: the resolution of loudness readings
+SOUND_DB = -60.0  # quieter than this is silence (an idle mixer writes zeros)
+QUIET_GAP = 0.8  # this long without sound ends a stretch of it (a sentence, a jingle)
 
 
 class MicError(RuntimeError):
@@ -254,6 +269,151 @@ class Mic:
             return max([c.end - self._t for c in self.clips] + [0.0])
 
 
+class _Downsampler:
+    """One stream's audio, brought down to EAR_RATE: each output sample is the
+    mean of the input that falls in its span (a box filter — cheap, and enough
+    anti-aliasing for speech). Carries its state across a stream's chunks."""
+
+    def __init__(self, rate: int):
+        self.step = rate / EAR_RATE
+        self.edge = self.step  # where the output sample being gathered ends (input samples from chunk start)
+        self.carry_sum = 0.0
+        self.carry_n = 0
+
+    def feed(self, x: array) -> array:
+        n = len(x)
+        cs = list(accumulate(x, initial=0.0))
+        out = array("f")
+        edge, step = self.edge, self.step
+        prev, acc_sum, acc_n = 0, self.carry_sum, self.carry_n
+        while edge <= n:
+            i = int(edge)
+            c = acc_n + i - prev
+            out.append((acc_sum + cs[i] - cs[prev]) / c if c else (out[-1] if out else 0.0))
+            prev, acc_sum, acc_n = i, 0.0, 0
+            edge += step
+        self.carry_sum = acc_sum + cs[n] - cs[prev]
+        self.carry_n = acc_n + n - prev
+        self.edge = edge - n
+        return out
+
+
+class Speakers:
+    """What the app plays, as Visor hears it: every playback stream mixed to
+    mono at EAR_RATE in a ring of the last EAR_SECONDS, on the monotonic clock
+    (which every process on the machine shares, so callers can ask by time)."""
+
+    def __init__(self, seconds: int = EAR_SECONDS, origin: Optional[float] = None):
+        self.size = seconds * EAR_RATE
+        self.ring = array("f", bytes(4 * self.size))
+        self.origin = time.monotonic() if origin is None else origin  # ring index 0
+        self.zeroed_to = 0  # absolute index from which nothing has been written (silence)
+        self.last_sound: Optional[float] = None  # when the last audible block ended
+        self.sound_since: Optional[float] = None  # when the current stretch of sound began
+        self._streams: dict[int, tuple[_Downsampler, int, float]] = {}  # stream -> (resampler, next index, next t)
+        self._lock = threading.Lock()
+
+    def index(self, t: float) -> int:
+        return round((t - self.origin) * EAR_RATE)
+
+    def time(self, index: int) -> float:
+        return self.origin + index / EAR_RATE
+
+    def played(self, stream: int, t0: float, rate: int, samples: array) -> None:
+        with self._lock:
+            state = self._streams.get(stream)
+            if state is None or abs(t0 - state[2]) > 0.002:  # new, or picking up after an underrun
+                state = (_Downsampler(rate), self.index(t0), t0)
+            down, at, _ = state
+            out = down.feed(samples)
+            self._streams[stream] = (down, at + len(out), t0 + len(samples) / rate)
+            if out:
+                self._mix(at, out)
+
+    def forget(self, stream: int) -> None:
+        with self._lock:
+            self._streams.pop(stream, None)
+
+    def _mix(self, at: int, out: array) -> None:
+        end = at + len(out)
+        if end > self.zeroed_to:  # clear last lap's audio (and any silent gap) before writing over it
+            start = max(self.zeroed_to, end - self.size)
+            self._fill(start, end, None)
+            self.zeroed_to = end
+        oldest = self.zeroed_to - self.size
+        if at < oldest:  # too old to remember
+            out = out[oldest - at:]
+            at = oldest
+        self._fill(at, at + len(out), out)
+        # Loudness, block by block, so a stretch of sound begins and ends where it does.
+        for i in range(0, len(out), EAR_BLOCK):
+            block = out[i:i + EAR_BLOCK]
+            if _db(block) > SOUND_DB:
+                t_start, t_end = self.time(at + i), self.time(at + i + len(block))
+                if self.last_sound is None or t_start - self.last_sound > QUIET_GAP:
+                    self.sound_since = t_start
+                self.last_sound = max(self.last_sound or t_end, t_end)
+
+    def _fill(self, a: int, b: int, values: Optional[array]) -> None:
+        """Zero (values None) or add ``values`` into absolute indices [a, b)."""
+        while a < b:
+            i = a % self.size
+            n = min(b - a, self.size - i)
+            if values is None:
+                self.ring[i:i + n] = array("f", bytes(4 * n))
+            else:
+                self.ring[i:i + n] = array("f", map(operator.add, self.ring[i:i + n], values[:n]))
+                values = values[n:]
+            a += n
+
+    def read(self, t_from: float, t_to: float) -> tuple[float, array]:
+        """The mix between two times (silence where nothing played), clamped to
+        what's remembered."""
+        with self._lock:
+            a = max(self.index(t_from), self.zeroed_to - self.size)
+            b = max(a, self.index(t_to))
+            out = array("f")
+            j, written = a, min(b, self.zeroed_to)
+            while j < written:
+                i = j % self.size
+                n = min(written - j, self.size - i)
+                out.extend(self.ring[i:i + n])
+                j += n
+            if b > j:  # nothing played there (yet): silence
+                out.extend(array("f", bytes(4 * (b - j))))
+            return self.time(a), out
+
+    def status(self, now: Optional[float] = None) -> dict:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            last, since = self.last_sound, self.sound_since
+        _, recent = self.read(now - 0.5, now)
+        playing = last is not None and now - last < QUIET_GAP / 2
+        return {
+            "now": now,
+            "playing": playing,
+            "sound_since": since if playing else None,
+            "quiet_for": None if last is None else round(max(0.0, now - last), 3),
+            "level_db": round(_db(recent), 1),
+            "memory_s": self.size // EAR_RATE,
+        }
+
+
+def _db(samples) -> float:
+    if not samples:
+        return -120.0
+    level = math.sqrt(sum(v * v for v in samples) / len(samples))
+    return 20 * math.log10(level) if level > 1e-6 else -120.0
+
+
+def pcm16(samples: array) -> bytes:
+    """Mono floats as 16-bit little-endian PCM."""
+    a = array("h", (32767 if v >= 1.0 else -32767 if v <= -1.0 else int(v * 32767) for v in samples))
+    if sys.byteorder != "little":
+        a.byteswap()
+    return a.tobytes()
+
+
 class WorldWatch:
     """Is the app's world running? Asks the layer, ~25 times a second.
 
@@ -360,9 +520,15 @@ def serve(name: str, log: Callable[[str], None] = print) -> int:
     watch = WorldWatch(d / f"{name}.sock", active=lambda: mic.busy() or bool(pulse and pulse.streams)).start()
     mic.world_running = lambda: watch.running
     mic.world_frame = lambda: watch.frame
-    pulse = PulseServer(pulse_socket(name), mic, log=log, clock=mic.now).start()
+    speakers = Speakers()
+    pulse = PulseServer(pulse_socket(name), mic, log=log, clock=mic.now, sink=speakers).start()
 
     watched: dict = {"pid": None}  # the app this microphone belongs to, once its record appears
+
+    def speakers_status() -> dict:
+        outputs = [{"client": s.client.name, "rate": s.rate, "channels": s.channels, "name": s.name,
+                    "corked": s.corked} for s in list(pulse.playback.values())]
+        return {"open": bool(outputs), "streams": outputs, "rate": EAR_RATE, **speakers.status()}
 
     def handle(cmd: str, args: dict) -> dict:
         if cmd == "ping":
@@ -379,7 +545,19 @@ def serve(name: str, log: Callable[[str], None] = print) -> int:
                 "remaining_s": round(mic.remaining(), 3),
                 "world": "paused" if not watch.running else "running",
                 "history": mic.history[-20:],
+                "speakers": speakers_status(),
             }
+        if cmd == "speakers":
+            return speakers_status()
+        if cmd == "heard":
+            # What the speakers played between two monotonic times, as 16-bit PCM.
+            now = time.monotonic()
+            t_to = min(float(args.get("to", now)), now)
+            t_from = max(float(args.get("from", t_to - 10.0)), t_to - EAR_SECONDS)
+            start, samples = speakers.read(t_from, t_to)
+            levels = [round(_db(samples[i:i + EAR_BLOCK]), 1) for i in range(0, len(samples), EAR_BLOCK)]
+            return {"from": start, "to": start + len(samples) / EAR_RATE, "rate": EAR_RATE, "levels": levels,
+                    "pcm": base64.b64encode(pcm16(samples)).decode() if args.get("pcm", True) else None}
         if cmd == "play":
             samples, rate = load_audio(args["path"])
             volume, label = float(args.get("volume", 1.0)), str(args.get("label", ""))
@@ -506,6 +684,27 @@ class MicClient:
 
     def stop(self) -> None:
         self._call("stop")
+
+    def speakers(self) -> dict:
+        """What the app's speakers are doing: open streams, whether it's
+        playing sound now, how loud, and how long it has been quiet."""
+        return self._call("speakers")
+
+    def heard(self, t_from: float, t_to: Optional[float] = None, pcm: bool = True) -> dict:
+        """What the speakers played between two times on the monotonic clock
+        (time.monotonic(), shared by every process on the machine): 16 kHz
+        mono samples, and the loudness of each 50 ms."""
+        args: dict = {"from": t_from, "pcm": pcm}
+        if t_to is not None:
+            args["to"] = t_to
+        r = self._call("heard", **args)
+        if pcm:
+            raw = array("h")
+            raw.frombytes(base64.b64decode(r["pcm"]))
+            if sys.byteorder != "little":
+                raw.byteswap()
+            r["samples"] = array("f", (v / 32768.0 for v in raw))
+        return r
 
     def _call(self, cmd: str, **args) -> dict:
         try:

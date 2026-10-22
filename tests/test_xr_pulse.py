@@ -21,7 +21,7 @@ import time
 import pytest
 
 from visor.xr import pulse
-from visor.xr.pulse import DESCRIPTOR, INVALID_INDEX, Out, PulseServer, Tags, pcm_bytes
+from visor.xr.pulse import DESCRIPTOR, INVALID_INDEX, Out, PulseServer, Tags, mono_weights, pcm_bytes, pcm_floats
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Unix sockets")
 
@@ -101,6 +101,10 @@ class Client:
         """Play ``nbytes`` of silence into a playback stream."""
         self.s.sendall(DESCRIPTOR.pack(nbytes, stream, 0, 0, 0) + bytes(nbytes))
 
+    def write_data(self, stream, data):
+        """Play these bytes into a playback stream."""
+        self.s.sendall(DESCRIPTOR.pack(len(data), stream, 0, 0, 0) + data)
+
     def requested(self, stream):
         return sum(n for s, n in self.requests if s == stream)
 
@@ -158,6 +162,23 @@ def test_pcm_formats():
     assert struct.unpack(">h", pcm_bytes([1.5], 4, 1)) == (32767,)  # clipped, big-endian
     assert pcm_bytes([0.0], 0, 1) == bytes([128])  # u8 silence
     assert pcm_bytes([1.0], 9, 1) == (8388607).to_bytes(3, "little", signed=True)
+
+
+class TestPCM:
+    def test_round_trip_every_format(self):
+        x = [0.5, -0.25, 0.75]
+        for fmt in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+            back = pcm_floats(pcm_bytes(x, fmt, 2), fmt, 2, mono_weights([1, 2]))
+            assert list(back) == pytest.approx(x, abs=1e-3), fmt
+
+    def test_surround_downmix_keeps_dialogue_and_drops_the_subwoofer(self):
+        frame = struct.pack("<6f", 0.2, 0.2, 0.5, 0.9, 0.0, 0.0)  # FL FR FC LFE RL RR
+        mono = pcm_floats(frame * 10, 5, 6, mono_weights([1, 2, 3, 7, 5, 6]))
+        assert mono[0] == pytest.approx(0.2 + 0.5 * 0.354, abs=1e-3)
+
+    def test_g711(self):
+        assert abs(pcm_floats(bytes([0x00]), 2, 1)[0]) > 0.9  # mu-law: loudest negative
+        assert abs(pcm_floats(bytes([0xD5]), 1, 1)[0]) < 0.001  # a-law: silence
 
 
 def test_handshake_and_the_one_microphone(server):
@@ -221,6 +242,44 @@ def test_speakers_play_at_real_time_pace(server):
     assert t.s64() == sent and t.s64() == sent  # everything written has been played
     t.u64(), t.u64()
     assert t.eof()
+
+
+def test_what_an_app_plays_reaches_the_sink():
+    class Ears:
+        def __init__(self):
+            self.got, self.forgot = [], []
+
+        def played(self, stream, t0, rate, samples):
+            self.got.append((stream, t0, rate, list(samples)))
+
+        def forget(self, stream):
+            self.forgot.append(stream)
+
+    ears = Ears()
+    d = tempfile.mkdtemp(prefix="vpa")
+    srv = PulseServer(os.path.join(d, "p.sock"), Tone(), mic_wake=0, sink=ears).start()
+    try:
+        c = Client(srv.path)
+        c.hello()
+        _, t = c.play(5, 2, 48000)
+        index = t.u32()
+        frames = [0.5, 0.5, -0.5, -0.5] * 1200  # 0.05 s of a square wave, both channels alike
+        c.write_data(index, pcm_bytes(frames, 5, 1))
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and sum(len(g[3]) for g in ears.got) < 4800:
+            c.audio_for(0.05)
+        heard = [v for g in ears.got for v in g[3]]
+        assert {g[0] for g in ears.got} == {index} and {g[2] for g in ears.got} == {48000}
+        assert heard[:4] == pytest.approx([0.5, -0.5, 0.5, -0.5])  # stereo folded to mono, in order
+        # Consecutive chunks follow on in time.
+        times = [(g[1], len(g[3])) for g in ears.got]
+        for (t0, n), (t1, _) in zip(times, times[1:]):
+            assert t1 == pytest.approx(t0 + n / 48000, abs=0.002)
+        c.command(pulse.DELETE_PLAYBACK_STREAM, bytes(Out().u32(index).buf))
+        assert ears.forgot == [index]
+    finally:
+        srv.stop()
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_corked_speakers_wait_and_flush_frees_the_buffer(server):

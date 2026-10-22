@@ -297,6 +297,81 @@ def pcm_bytes(samples: list[float], fmt: int, channels: int) -> bytes:
     return a.tobytes()
 
 
+def _ulaw(b: int) -> int:
+    b = ~b & 0xFF
+    sample = ((((b & 0x0F) << 3) + 0x84) << ((b >> 4) & 0x07)) - 0x84
+    return -sample if b & 0x80 else sample
+
+
+def _alaw(b: int) -> int:
+    b ^= 0x55
+    exponent, mantissa = (b >> 4) & 0x07, b & 0x0F
+    sample = (((mantissa << 4) + 0x108) << (exponent - 1)) if exponent else (mantissa << 4) + 8
+    return sample if b & 0x80 else -sample
+
+
+_G711 = {1: [_alaw(b) / 32768.0 for b in range(256)], 2: [_ulaw(b) / 32768.0 for b in range(256)]}
+
+
+# Channel positions (pulse/channelmap.h) and their share of a mono downmix: the fronts
+# carry the mix, centre/rear/side add at -3 dB each, and the subwoofer is left out.
+_MONO_WEIGHT = {0: 1.0, 1: 0.5, 2: 0.5, 3: 0.354, 4: 0.354, 5: 0.354, 6: 0.354, 7: 0.0, 8: 0.5, 9: 0.5,
+                10: 0.354, 11: 0.354}
+
+
+def mono_weights(positions: list[int]) -> list[float]:
+    """How much each channel of a stream counts in its mono downmix."""
+    w = [_MONO_WEIGHT.get(p, 0.354) for p in positions]
+    if not any(w):
+        return [1.0 / len(positions)] * len(positions)
+    if len(positions) == 1:
+        return [1.0]
+    return w
+
+
+def pcm_floats(data: bytes, fmt: int, channels: int, weights: Optional[list[float]] = None) -> array:
+    """Interleaved PCM in a PulseAudio format as mono float samples — channels
+    averaged, or mixed by ``weights`` (see :func:`mono_weights`): the inverse
+    of :func:`pcm_bytes`."""
+    little = fmt in (3, 5, 7, 9, 11)
+    swap = little != (sys.byteorder == "little")
+    if fmt in (5, 6, 3, 4, 7, 8, 11, 12):
+        code, width, scale = {5: ("f", 4, 1.0), 6: ("f", 4, 1.0), 3: ("h", 2, 1 / 32768), 4: ("h", 2, 1 / 32768),
+                              7: ("i", 4, 1 / 2147483648), 8: ("i", 4, 1 / 2147483648),
+                              11: ("i", 4, 1 / 8388608), 12: ("i", 4, 1 / 8388608)}[fmt]
+        a = array(code)
+        a.frombytes(data[: len(data) // width * width])
+        if swap:
+            a.byteswap()
+        if fmt in (11, 12):  # 24 bits in the low end of 32; the top byte may be anything
+            a = array("i", (((v & 0xFFFFFF) ^ 0x800000) - 0x800000 for v in a))
+    elif fmt in (9, 10):
+        order = "little" if little else "big"
+        a = array("i", (int.from_bytes(data[i:i + 3], order, signed=True) for i in range(0, len(data) - 2, 3)))
+        scale = 1 / 8388608
+    elif fmt == 0:
+        a, scale = array("i", (b - 128 for b in data)), 1 / 128
+    elif fmt in _G711:
+        table = _G711[fmt]
+        a, scale = array("f", (table[b] for b in data)), 1.0
+    else:
+        raise ValueError(f"unsupported sample format {fmt}")
+    if channels == 1:
+        return a if (a.typecode == "f" and scale == 1.0) else array("f", (v * scale for v in a))
+    n = len(a) // channels
+    w = [x * scale for x in (weights or [1.0 / channels] * channels)]
+    if channels == 2:
+        wl, wr = w
+        return array("f", (x * wl + y * wr for x, y in zip(a[0:2 * n:2], a[1:2 * n:2])))
+    cols = [(a[k:channels * n:channels], w[k]) for k in range(channels) if w[k]]
+    if not cols:
+        return array("f", bytes(4 * n))
+    out = array("f", (v * cols[0][1] for v in cols[0][0]))
+    for col, wk in cols[1:]:
+        out = array("f", (o + v * wk for o, v in zip(out, col)))
+    return out
+
+
 def negotiate(fmt: int, channels: int, rate: int, cmap: list[int],
               formats: list[tuple[int, dict]]) -> Optional[tuple[int, int, int, list[int]]]:
     """The PCM format a new stream gets: what it asked for, or — clients using
@@ -336,6 +411,15 @@ class Source(Protocol):
     def render(self, t0: float, rate: int, n: int) -> list[float]:
         """``n`` mono samples at ``rate`` starting at monotonic time ``t0``.
         Every stream asks by time, so all of them hear the same moment."""
+
+
+class Sink(Protocol):
+    """What hears the speakers: Visor's ears (visor.xr.mic.Speakers)."""
+
+    def played(self, stream: int, t0: float, rate: int, samples: array) -> None:
+        """Mono samples at ``rate`` that one stream plays from monotonic time
+        ``t0`` on. Each stream's calls follow on from each other unless it
+        underran; all streams' are to be mixed."""
 
 
 @dataclass
@@ -381,6 +465,8 @@ class PlaybackStream:
     owed: int = 0  # taken since we last asked for more
     last: float = 0.0  # when the speakers last ran
     drains: list = field(default_factory=list)  # tags to answer once everything has played
+    pending: bytearray = field(default_factory=bytearray)  # written, not yet taken by the speakers
+    cursor: float = 0.0  # when the next frame taken will be heard
 
     @property
     def frame_bytes(self) -> int:
@@ -480,9 +566,11 @@ class PulseServer:
     TICK = 0.01
 
     def __init__(self, path: str, source: Source, log: Callable[[str], None] = lambda m: None,
-                 clock: Callable[[], float] = time.monotonic, mic_wake: float = MIC_WAKE):
+                 clock: Callable[[], float] = time.monotonic, mic_wake: float = MIC_WAKE,
+                 sink: Optional[Sink] = None):
         self.path = str(path)
         self.source = source
+        self.sink = sink  # hears what the speakers play; without one, it goes nowhere
         self.log = log
         # Streams are timed on this clock: real time by default; Visor's mic
         # passes one that stops while the world is paused.
@@ -574,11 +662,16 @@ class PulseServer:
                     break
                 if channel == INVALID_INDEX:
                     self._command(c, payload)
-                else:  # what the app plays: counted, so it's paced like real speakers, then let go
+                else:  # what the app plays: paced like real speakers, and heard if anyone's listening
                     with self._lock:
                         s = self.playback.get(channel)
                         if s is not None and s.client is c:
                             s.written += len(payload)
+                            if self.sink is not None:
+                                s.pending += payload
+                                over = len(s.pending) - s.maxlength  # more than it was ever asked for
+                                if over > 0:
+                                    del s.pending[:over]
         finally:
             c.close()
             with self._lock:
@@ -586,6 +679,7 @@ class PulseServer:
                     del self.streams[idx]
                 for idx in [i for i, s in self.playback.items() if s.client is c]:
                     del self.playback[idx]
+                    self._forget(idx)
                 if c in self.clients:
                     self.clients.remove(c)
             c.sock.close()
@@ -632,7 +726,7 @@ class PulseServer:
         more as room frees up, and answer drains once it has all played. The
         buffer ahead of real time is what lets an app write its next chunk
         before the last one runs out, as on real hardware."""
-        requests, drained = [], []
+        requests, drained, heard = [], [], []
         with self._lock:
             for s in self.playback.values():
                 elapsed, s.last = (now - s.last if s.last else 0.0), now
@@ -655,6 +749,14 @@ class PulseServer:
                     s.hw += move
                     s.played += (pulled + move) * fb
                     s.owed += (pulled + move) * fb
+                    taken = (pulled + move) * fb
+                    if taken and self.sink is not None:
+                        # Heard right after what was taken before it — or, after an underrun,
+                        # from when the pulled frames played.
+                        start = max(s.cursor, now - pulled / s.rate)
+                        heard.append((s.index, start, s.rate, bytes(s.pending[:taken]), s.fmt, s.channels, s.channel_map))
+                        del s.pending[:taken]
+                        s.cursor = start + (pulled + move) / s.rate
                 if s.owed and (s.owed >= s.minreq or s.written - s.played < fb):
                     requests.append((s.client, s.index, s.owed))
                     s.owed = 0
@@ -665,6 +767,11 @@ class PulseServer:
             client.send(bytes(Out().u32(REQUEST).u32(INVALID_INDEX).u32(index).u32(nbytes).buf))
         for client, tag in drained:
             client.reply(tag)
+        for index, start, rate, data, fmt, channels, cmap in heard:
+            try:
+                self.sink.played(index, start, rate, pcm_floats(data, fmt, channels, mono_weights(cmap)))
+            except Exception as e:  # the ears must never take the speakers down
+                self.log(f"couldn't hear what was played: {e}")
 
     # -- commands ---------------------------------------------------------
 
@@ -841,10 +948,16 @@ class PulseServer:
             s = self.playback.get(idx)
             if s is not None and s.client is c:
                 del self.playback[idx]
+                self._forget(idx)
         if s is None or s.client is not c:
             c.error(tag, ERR_NOENTITY)
             return
         c.reply(tag)
+
+    def _forget(self, index: int) -> None:
+        forget = getattr(self.sink, "forget", None)
+        if forget is not None:
+            forget(index)
 
     def _cork_playback(self, c: Connection, tag: int, t: Tags) -> None:
         idx, corked = t.u32(), t.boolean()
@@ -865,6 +978,7 @@ class PulseServer:
             s.owed += s.written - s.played  # the dropped audio's room is free again
             s.played = s.written
             s.hw = s.frac = 0.0
+            s.pending.clear()
         c.reply(tag)
 
     def _drain_playback(self, c: Connection, tag: int, t: Tags) -> None:
