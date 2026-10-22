@@ -27,8 +27,10 @@ from typing import Callable, Optional
 from PIL import Image
 
 from visor.xr import paths
+from visor.xr import voice as tts
 from visor.xr.client import XrClient, XrError, qrot
 from visor.xr.frames import FrameError, FrameReader
+from visor.xr.mic import MicError
 from visor.xr.playtest.brains import (ACTION_TOOLS, Brain, BrainContext, Call, Observation, describe_controls,
                                       make_brain)
 from visor.xr.playtest.oracles import Issue, Oracles
@@ -70,6 +72,7 @@ class StepRecord:
     result: str
     screenshot: str
     t: float
+    audio: str = ""  # what was said, for `say` steps (a WAV in the run dir)
 
 
 class TimeLapse:
@@ -152,6 +155,9 @@ class Playtest:
         self.crash: Optional[dict] = None
         self.sim: Optional[SimInstance] = None
         self.xr: Optional[XrClient] = None
+        self.voice_events: list[dict] = []  # what was said, at which frame: replayed with the inputs
+        self._listening: Optional[bool] = None
+        self._said = ""
         self._log_offset = 0
         self.started = time.time()
 
@@ -253,7 +259,41 @@ class Playtest:
         if call.name == "wait":
             secs = max(0.1, min(30.0, float(a.get("seconds", 1.0))))
             return (f"Waited {secs:.1f}s.", round(secs * FPS))
+        if call.name == "say":
+            return self._say(str(a.get("text", "")), a.get("language"))
         return (f"Unknown action {call.name}.", 0)
+
+    def _say(self, text: str, language: Optional[str]) -> tuple[str, int]:
+        """Speak into the app's microphone; the world runs for as long as it takes to say."""
+        p = self.persona
+        try:
+            speech = tts.synthesize(text, language=language, speed=p.speech_speed,
+                                    log=lambda m: self._emit("status", message=m))
+            frame = int(self.xr.state().get("frame", 0))
+            heard = self.xr.mic().play(speech.path, volume=p.voice_volume, label=speech.text, kind="speech")
+        except (tts.VoiceError, MicError) as e:
+            return (f"You can't speak here: {e}", 0)
+        rel = f"voice/{len(self.voice_events) + 1:03d}.wav"
+        (self.dir / "voice").mkdir(exist_ok=True)
+        shutil.copyfile(speech.path, self.dir / rel)
+        self.voice_events.append({"frame": frame, "audio": rel, "text": speech.text, "voice": speech.voice,
+                                  "volume": p.voice_volume, "duration": round(speech.duration, 2)})
+        self._said = rel
+        note = "" if heard.get("listening") else " The app wasn't listening (its microphone was off), so nothing heard you."
+        return (f"You said \"{speech.text}\" ({speech.duration:.1f}s).{note}", round((speech.duration + 0.8) * FPS))
+
+    def _mic_note(self) -> str:
+        """A sentence when the app turns its microphone on or off."""
+        try:
+            listening = bool(self.xr.mic().status()["listening"])
+        except MicError:
+            return ""
+        before, self._listening = self._listening, listening
+        if listening == before:
+            return ""
+        if listening:
+            return " The app's microphone is on: it's listening."
+        return "" if before is None else " The app turned its microphone off."
 
     def _observe(self, step: int, text: str) -> tuple[Observation, str, int]:
         img, rel, frame = self._shot(step)
@@ -265,6 +305,7 @@ class Playtest:
         if haptics:
             hands = sorted({e.get("hand", "?") for e in haptics})
             extra = f" You felt {len(haptics)} haptic pulse(s) ({', '.join(hands)})."
+        extra += self._mic_note()
         return Observation(image=img, text=f"{text}{extra} [{left} actions left]", step=step,
                            steps_left=left), rel, frame
 
@@ -294,6 +335,8 @@ class Playtest:
                                name=self.name, run_dir=self.dir)
         self._emit("status", message=f"starting {spec.name} as {p.name}")
         self.sim.start()
+        for note in self.sim.notes:
+            self._emit("status", message=note)
         self.xr = self.sim.wait_ready(timeout=600, on_progress=lambda note: self._emit("status", message=note))
         self._events_seen = 0
         if "right" not in p.hands:
@@ -326,7 +369,8 @@ class Playtest:
                            controls=describe_controls(info.get("actions", [])),
                            image_size=img.size, max_steps=self.cfg.max_steps)
         self.brain.start(ctx)
-        obs = Observation(image=img, text="This is the first thing you see.", step=0, steps_left=self.cfg.max_steps)
+        obs = Observation(image=img, text="This is the first thing you see." + self._mic_note(), step=0,
+                          steps_left=self.cfg.max_steps)
         calls = self.brain.first(obs)
         deadline = self.started + self.cfg.max_minutes * 60
         step = 0
@@ -367,7 +411,9 @@ class Playtest:
                 acted = acted or f > 0
                 results.append((call, text))
                 self.steps.append(StepRecord(step=step, frame=frame, action=call.name, args=call.args,
-                                             thought=call.thought, result=text, screenshot="", t=time.time()))
+                                             thought=call.thought, result=text, screenshot="", t=time.time(),
+                                             audio=self._said))
+                self._said = ""
                 self._emit("action", step=step, action=call.name, args=call.args, thought=call.thought, result=text)
             if finished:
                 break
@@ -406,7 +452,10 @@ class Playtest:
         if self.xr and self.sim and self.sim.alive():
             try:
                 replay = self.xr.record_stop()
-                (self.dir / "replay.json").write_text(json.dumps({"visor_replay": 1, **replay}, indent=1))
+                start = int(replay.get("start_frame") or 0)
+                voice = [{**v, "frame": v["frame"] - start} for v in self.voice_events]
+                (self.dir / "replay.json").write_text(json.dumps({"visor_replay": 1, **replay,
+                                                                  **({"voice": voice} if voice else {})}, indent=1))
             except XrError:
                 pass
             try:

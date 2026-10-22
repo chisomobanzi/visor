@@ -108,10 +108,12 @@ def write_html(report: dict, out: Path) -> Path:
     for s in steps:
         thumb = f'<img src="{_e(s["screenshot"])}" loading="lazy" alt="">' if s.get("screenshot") else '<div class="noimg"></div>'
         thought = f'<p class="thought">“{_e(s["thought"][:320])}”</p>' if s.get("thought") else ""
+        said = (f'<p class="said"><span>🗣</span> “{_e(s["args"].get("text", ""))}”'
+                f'<audio controls preload="none" src="{_e(s["audio"])}"></audio></p>') if s.get("audio") else ""
         film.append(f"""
         <li><a href="{_e(s.get('screenshot') or '#')}" target="_blank">{thumb}</a>
           <div><b>{s['step']}. {_e(s['action'])}</b> <code>{_e(json.dumps(s['args']))}</code>
-          <p>{_e(s['result'])}</p>{thought}</div></li>""")
+          {said}<p>{_e(s['result'])}</p>{thought}</div></li>""")
 
     crash = report.get("crash")
     crash_html = ""
@@ -142,6 +144,7 @@ def write_html(report: dict, out: Path) -> Path:
 <title>Playtest · {_e(report['app'].get('name'))} · {_e(persona.get('name'))}</title>
 <style>
 :root {{
+  color-scheme: dark;  /* native controls (the audio players) match the page */
   --bg:#101318; --surface:#171b22; --raised:#1d232d; --line:#2a303b;
   --ink:#e8eaf2; --muted:#8a93a6; --faint:#5a6272;
   --lens:#6bcbdf; --good:#2fa36b; --warn:#c98500; --bad:#e66767; --minor:#d0a54a; --note:#7f8ba3;
@@ -213,6 +216,8 @@ td.good {{ color: var(--good); }} td.warn {{ color: var(--warn); }} td.bad {{ co
 .film img, .film .noimg {{ width: 160px; aspect-ratio: 1/1.05; object-fit: cover; border-radius: 8px; background: var(--raised); }}
 .film p {{ margin: 4px 0 0; color: #c9cfdb; }}
 .film .thought {{ color: var(--muted); font-style: italic; }}
+.film .said {{ display:flex; flex-wrap: wrap; align-items:center; gap: 6px 12px; color: var(--ink); font-size: 15px; }}
+.film .said audio {{ height: 30px; max-width: 100%; }}
 .crash {{ background: color-mix(in srgb, var(--bad) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line));
   border-radius: 14px; padding: 16px; }}
 .crash pre {{ overflow:auto; max-height: 360px; background: #0c0f13; padding: 12px; border-radius: 9px; }}

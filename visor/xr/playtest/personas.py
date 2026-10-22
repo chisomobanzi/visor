@@ -2,9 +2,9 @@
 
 A persona is two things. How it behaves — instructions for the agent's
 judgement (what it notices, what it tries, what it gives up on). And what it
-physically is — eye height, which hands it has, how far it can turn — which
-the virtual headset enforces, so a seated player really can't reach the high
-shelf.
+physically is — eye height, which hands it has, how far it can turn, how loud
+and fast it talks — which the virtual headset enforces, so a seated player
+really can't reach the high shelf and a quiet one really is quiet.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ class Persona:
     max_turn_deg: float = 180.0  # how far they'll physically turn from forward
     max_turn_speed: float = 180.0  # degrees per second they'll tolerate
     patience_steps: int = 6  # stuck this long -> report it and try something else
+    voice_volume: float = 1.0  # 1 is a normal voice at a headset mic (-20 dBFS); 0.35 is quiet
+    speech_speed: float = 1.0
     tags: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -65,6 +67,7 @@ _add(Persona(
     watch_for=("soft-locks", "double-submits", "broken state after rapid input", "skippable gates",
                "crashes under input spam"),
     patience_steps=4,
+    speech_speed=1.3,
     tags=("robustness", "exploits"),
 ))
 
@@ -116,6 +119,23 @@ _add(Persona(
     watch_for=("actions only on the right hand", "no handedness setting", "two-handed requirements"),
     hands=("left",),
     tags=("accessibility",),
+))
+
+_add(Persona(
+    key="soft-spoken",
+    name="Soft-spoken player",
+    tagline="Talks quietly and briefly; self-conscious speaking aloud.",
+    behaviour=(
+        "You speak quietly and keep it short — talking out loud in a headset feels awkward to you. "
+        "When the app wants you to speak, you answer in a few words at your normal low volume. If it "
+        "doesn't seem to hear you, try once more, then look for another way forward (a skip, a "
+        "button, typing). Report anything that only works for a loud, confident voice, and any "
+        "moment you can't tell whether you were heard."
+    ),
+    watch_for=("voice features that need a raised voice", "no sign you were heard",
+               "no way past a voice step without speaking", "speech cut off or misheard"),
+    voice_volume=0.35,
+    tags=("accessibility", "voice"),
 ))
 
 _add(Persona(
