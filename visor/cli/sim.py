@@ -90,6 +90,14 @@ def doctor():
         ok_all &= ok
         table.add_row("[green]✓[/green]" if ok else "[red]✗[/red]", f"installed: {name}",
                       "" if ok else "run [bold]visor sim setup[/bold]")
+    from visor.xr import voice as tts
+
+    # Optional: without speech, apps still get a (silent) microphone and recordings still play.
+    if tts.available():
+        have = tts.installed()
+        table.add_row("[green]✓[/green]", "speech", f"[dim]{', '.join(have) if have else 'voices download on first use'}[/dim]")
+    else:
+        table.add_row("[yellow]–[/yellow]", "speech", "optional: pip install 'visor-dev[voice]'")
     console.print(Panel(table, title="virtual headset", expand=False))
     if not ok_all:
         raise typer.Exit(1)
@@ -140,7 +148,8 @@ def run(
     paused: bool = typer.Option(False, "--paused", help="Start frozen; advance with `visor sim step`"),
     deterministic: bool = typer.Option(False, "--deterministic", help="Fixed timestep, for exact replays (Unreal)"),
     seated: bool = typer.Option(False, "--seated", help="Seated eye height (1.2 m) instead of standing"),
-    mic: bool = typer.Option(False, "--mic", help="Let the app use this computer's microphone"),
+    mic: bool = typer.Option(False, "--mic", help="Let the app hear this computer's real microphone "
+                             "(otherwise it hears only what `visor sim say` plays it)"),
     capture_fps: float = typer.Option(0.0, "--capture-fps", help="Publish frames continuously at this rate"),
     detach: bool = typer.Option(False, "--detach", "-d", help="Leave it running and return"),
     timeout: float = typer.Option(300.0, "--timeout", help="Seconds to wait for the VR session"),
@@ -170,6 +179,12 @@ def run(
     session = info.get("session", {})
     console.print(f"[green]●[/green] running — {session.get('interaction_profile') or 'no controllers bound'}, "
                   f"{len(info.get('actions', []))} actions; socket [dim]{sim.socket_path}[/dim]")
+    if mic:
+        console.print("  [dim]microphone:[/dim] this computer's")
+    elif sim.mic_proc:
+        console.print("  [dim]microphone:[/dim] Visor's — talk to it with [bold]visor sim say \"hello\"[/bold]")
+    for note in sim.notes:
+        console.print(f"  [yellow]{note}[/yellow]")
     if detach:
         console.print(f"  drive it with [bold]visor sim shot {sim.name}[/bold], "
                       f"[bold]visor sim press right trigger[/bold], stop with [bold]visor sim stop {sim.name}[/bold]")
@@ -406,13 +421,129 @@ def replay(
     script: Path = typer.Argument(..., exists=True, help="A replay script from `visor sim record --script`"),
     target: Optional[str] = typer.Option(None, "--app", "-a"),
 ):
-    """Play back a recorded input timeline, frame for frame."""
+    """Play back a recorded input timeline (and anything said), frame for frame."""
+    from visor.xr.mic import MicError
+
     data = json.loads(script.read_text())
     xr = _client(target)
-    r = _xr(xr.replay, data)
+    try:
+        r = _xr(xr.replay, data, base_dir=script.resolve().parent)
+    except MicError as e:
+        _die(str(e))
     late = int(r.get("late_frames", 0))
-    console.print(f"[dim]scheduled {int(r['scheduled'])} input changes from frame {int(r['start_frame'])}"
+    said = f", {r['voice']} spoken lines" if r.get("voice") else ""
+    console.print(f"[dim]scheduled {int(r['scheduled'])} input changes{said} from frame {int(r['start_frame'])}"
                   f"{f' ({late} frames late: the app was already past the start)' if late else ''}[/dim]")
+
+
+# --------------------------------------------------------------------------
+# the voice
+
+
+@sim_app.command()
+def say(
+    text: Optional[str] = typer.Argument(None, help="What to say (spoken with offline text-to-speech)"),
+    target: Optional[str] = typer.Option(None, "--app", "-a"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", exists=True, help="Play a recording instead"),
+    language: Optional[str] = typer.Option(None, "--lang", "-l", help="Speak this language: es, fr, de, pt-BR…"),
+    voice: Optional[str] = typer.Option(None, "--voice", help="A Piper voice name, e.g. en_GB-alba-medium"),
+    volume: float = typer.Option(1.0, "--volume", help="0.3 is softly spoken, 2 is loud"),
+    speed: float = typer.Option(1.0, "--speed", help="Speaking rate (0.5–2)"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Return when it's been said"),
+):
+    """Speak into the app's microphone. It hears only what Visor plays it."""
+    from visor.xr import voice as tts
+    from visor.xr.mic import MicError
+
+    if not text and not file:
+        _die("say something, or pass --file")
+    xr = _client(target)
+    try:
+        if file:
+            r = xr.play_audio(file, volume=volume)
+        else:
+            with console.status("finding the words") as status:
+                def progress(msg: str) -> None:
+                    status.update(f"[bold]{msg}[/bold]")
+
+                speech = tts.synthesize(text, voice=voice, language=language, speed=speed, log=progress)
+                r = xr.mic().play(speech.path, volume=volume, label=speech.text, kind="speech")
+                r.update(text=speech.text, voice=speech.voice)
+    except (tts.VoiceError, MicError) as e:
+        _die(str(e))
+    what = f"“{r['text']}”" if r.get("text") else str(file)
+    console.print(f"[bold cyan]🗣[/bold cyan] {what} [dim]({r['duration']:.1f}s{', ' + r['voice'] if r.get('voice') else ''})[/dim]")
+    if r.get("world") == "paused":
+        console.print("  [yellow]the world is paused[/yellow] — it'll be heard when it runs "
+                      "([bold]visor sim resume[/bold] or [bold]visor sim step 72[/bold])")
+    elif not r.get("listening"):
+        console.print("  [dim]the app isn't listening right now (no microphone stream open), so it hears nothing[/dim]")
+    if wait:
+        time.sleep(max(0.0, float(r.get("starts_in", 0.0))) + float(r["duration"]))
+
+
+@sim_app.command()
+def mic(target: Optional[str] = typer.Argument(None, help="Instance name (default: the only one)")):
+    """Is the app listening? What has it been told?"""
+    from visor.xr.mic import MicError
+
+    xr = _client(target)
+    try:
+        st = xr.mic().status()
+    except MicError as e:
+        _die(str(e))
+    if st["listening"]:
+        for s in st["streams"]:
+            console.print(f"[green]●[/green] listening — {s['client'] or 'the app'} "
+                          f"[dim]{s['rate']} Hz × {s['channels']}{(' · ' + s['name']) if s['name'] else ''}[/dim]")
+    else:
+        console.print("[dim]○ not listening (no microphone stream open)[/dim]")
+    if st["speaking"]:
+        console.print(f"[cyan]🗣 speaking[/cyan] [dim]({st['remaining_s']:.1f}s left)[/dim]")
+    if st["world"] == "paused":
+        console.print("[yellow]world paused[/yellow] [dim]— the microphone waits with it[/dim]")
+    for h in st["history"][-8:]:
+        console.print(f"  [dim]{time.strftime('%H:%M:%S', time.localtime(h['at']))}[/dim] {h['label'] or '(audio)'} "
+                      f"[dim]{h['duration']:.1f}s[/dim]")
+
+
+@sim_app.command()
+def voices(
+    get: Optional[str] = typer.Option(None, "--get", help="Download a voice now: a language (es) or a Piper voice name"),
+):
+    """Voices for `visor sim say`: what's installed, and one for each language."""
+    from visor.xr import voice as tts
+
+    if not tts.available():
+        console.print("[yellow]no text-to-speech engine[/yellow] — pip install 'visor-dev[voice]' "
+                      "[dim](recordings still work: visor sim say --file hello.wav)[/dim]")
+    if get:
+        try:
+            name = tts.resolve(voice=get if "-" in get else None, language=None if "-" in get else get)
+            with console.status(f"downloading {name}"):
+                tts.ensure(name)
+        except tts.VoiceError as e:
+            _die(str(e))
+        console.print(f"[green]✓[/green] {name}")
+    have = set(tts.installed())
+    t = Table(box=None, header_style="bold dim")
+    t.add_column("lang")
+    t.add_column("voice")
+    t.add_column("")
+    for lang, name in sorted(tts.LANGUAGE_VOICES.items()):
+        t.add_row(lang, name, "[green]installed[/green]" if name in have else "[dim]downloads on first use[/dim]")
+    for name in sorted(have - set(tts.LANGUAGE_VOICES.values())):
+        t.add_row("", name, "[green]installed[/green]")
+    console.print(t)
+    console.print("[dim]any voice from https://huggingface.co/rhasspy/piper-voices works: --voice <name>[/dim]")
+
+
+@sim_app.command("mic-server", hidden=True)
+def mic_server(name: str = typer.Argument(...)):
+    """Serve one app's microphone (started by `visor sim run`)."""
+    from visor.xr.mic import main as mic_main
+
+    raise typer.Exit(mic_main([name]))
 
 
 # --------------------------------------------------------------------------

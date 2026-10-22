@@ -49,6 +49,10 @@ app = [
 agent = [
     "anthropic>=1.0",
 ]
+# Speech for the virtual headset's microphone (visor sim say): offline text-to-speech.
+voice = [
+    "piper-tts>=1.3",
+]
 
 [project.scripts]
 visor = "visor.cli.main:app"

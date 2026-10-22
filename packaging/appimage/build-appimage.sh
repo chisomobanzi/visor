@@ -42,7 +42,7 @@ cat > "$RECIPE/entrypoint.sh" << 'EOF'
 EOF
 
 # no spaces: python-appimage word-splits requirement lines when invoking pip
-printf 'visor-dev[app,agent]@file://%s\n' "$ROOT" > "$RECIPE/requirements.txt"
+printf 'visor-dev[app,agent,voice]@file://%s\n' "$ROOT" > "$RECIPE/requirements.txt"
 
 if command -v uvx > /dev/null 2>&1; then
     BUILDER=(uvx python-appimage)

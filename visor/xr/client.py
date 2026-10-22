@@ -87,6 +87,7 @@ class XrClient:
         self._lock = threading.Lock()
         self._id = 0
         self._reader: Optional[FrameReader] = None
+        self._mic = None  # visor.xr.mic.MicClient, on first use
         self.fov_fallback = (54.0, 45.0, 47.0, 51.0)
 
     # -- plumbing ---------------------------------------------------------
@@ -113,6 +114,9 @@ class XrClient:
             if self._reader is not None:
                 self._reader.close()
                 self._reader = None
+            if self._mic is not None:
+                self._mic.close()
+                self._mic = None
 
     def __enter__(self) -> "XrClient":
         return self
@@ -183,10 +187,12 @@ class XrClient:
     def schedule(self, events: Iterable[dict], relative: bool = True) -> dict:
         return self.call("schedule", events=list(events), relative=relative)
 
-    def replay(self, script: dict) -> dict:
+    def replay(self, script: dict, base_dir: Optional[str | Path] = None) -> dict:
         """Play back a recording. With its absolute start frame (and a fixed
         timestep) every input lands at the same game time as when recorded;
-        older scripts without one start from the next frame."""
+        older scripts without one start from the next frame. Speech in the
+        script (``voice``: audio files relative to ``base_dir``) is played into
+        the app's microphone at the frame it was first spoken."""
         start = script.get("start_frame")
         if start is None:
             return self.schedule(script["events"], relative=True)
@@ -195,6 +201,14 @@ class XrClient:
         result = self.schedule(events, relative=False)
         result["start_frame"] = int(start)
         result["late_frames"] = max(0, now + 1 - int(start))
+        voice = script.get("voice") or []
+        if voice:
+            mic = self.mic()
+            for v in voice:
+                audio = Path(base_dir or ".") / v["audio"]
+                mic.play(audio, volume=float(v.get("volume", 1.0)), label=v.get("text", ""),
+                         at_frame=int(start) + int(v.get("frame", 0)), kind="speech" if v.get("text") else "audio")
+            result["voice"] = len(voice)
         return result
 
     def clear(self) -> None:
@@ -378,6 +392,31 @@ class XrClient:
 
     def actions(self) -> list[dict]:
         return self.info().get("actions", [])
+
+    # -- the voice ----------------------------------------------------------
+
+    def mic(self):
+        """The app's microphone (visor.xr.mic.MicClient)."""
+        from visor.xr.mic import MicClient
+
+        if self._mic is None:
+            self._mic = MicClient.for_app(self.socket_path)
+        return self._mic
+
+    def say(self, text: str, voice: Optional[str] = None, language: Optional[str] = None,
+            volume: float = 1.0, speed: float = 1.0) -> dict:
+        """Speak into the app's microphone (offline text-to-speech). Returns
+        how long it lasts, the voice, the audio file, and whether the app is
+        listening. While the world is paused the line waits for it to run."""
+        from visor.xr import voice as tts
+
+        speech = tts.synthesize(text, voice=voice, language=language, speed=speed)
+        result = self.mic().play(speech.path, volume=volume, label=speech.text, kind="speech")
+        return {**result, "text": speech.text, "voice": speech.voice, "audio": str(speech.path)}
+
+    def play_audio(self, path: str | Path, volume: float = 1.0) -> dict:
+        """Play a recording (any audio file) into the app's microphone."""
+        return self.mic().play(path, volume=volume, label=Path(path).name)
 
     def press_action(self, name: str, frames: int = 6, value: Optional[float] = None) -> dict:
         """Drive whatever input the app bound to its action ``name``."""

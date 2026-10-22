@@ -71,12 +71,20 @@ class TestEnvironment:
         assert env["XRT_COMPOSITOR_NULL_VIEW_WIDTH"] == "840"  # Quest 3 at half scale
         assert env["VISOR_XR_SOCKET"].endswith("/visor-xr/t1.sock")
         assert env["VISOR_XR_SHM"] == "/visor-t1"
-        assert env["PULSE_SERVER"] == "unix:/nonexistent"  # no microphone unless asked
+        # Its audio server is Visor's microphone, and PipeWire is out of reach: it can't hear the room.
+        assert env["PULSE_SERVER"] == f"unix:{xr_home / 'run' / 'visor-xr' / 't1.pulse'}"
+        assert env["PIPEWIRE_REMOTE"] == "/nonexistent"
+
+    def test_no_microphone_at_all(self, xr_home):
+        sim = SimInstance(AppSpec(name="a", command=["x"]), SimConfig(virtual_mic=False), name="t4")
+        assert sim.environment()["PULSE_SERVER"] == "unix:/nonexistent"
 
     def test_microphone_opt_in(self, xr_home, monkeypatch):
         monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
         sim = SimInstance(AppSpec(name="a", command=["x"]), SimConfig(microphone=True), name="t2")
-        assert "PULSE_SERVER" not in sim.environment()
+        env = sim.environment()
+        assert "PULSE_SERVER" not in env and "PIPEWIRE_REMOTE" not in env
 
     def test_start_refuses_without_setup(self, xr_home):
         sim = SimInstance(AppSpec(name="a", command=["/bin/true"]), name="t3")

@@ -7,8 +7,8 @@ the controllers and the pause button. Nothing about the app changes — it is
 launched with a different runtime and one extra API layer.
 
 Every instance is isolated: its own runtime (Monado runs in-process), socket,
-frame buffer and run directory. So any number can run side by side, limited
-only by GPU and memory.
+frame buffer, microphone and run directory. So any number can run side by
+side, limited only by GPU and memory.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from visor.xr import mic as xr_mic
 from visor.xr import paths
 from visor.xr.client import XrClient, XrError
 from visor.xr.headsets import Headset, get_headset
@@ -169,6 +170,7 @@ class SimConfig:
     eyes: str = "left"
     paused: bool = False  # start paused, waiting for the first step
     microphone: bool = False  # let the app hear this computer's real mic
+    virtual_mic: bool = True  # else Visor's own: it hears only what Visor plays it (visor.xr.mic)
     gpu: Optional[int] = None  # Vulkan device index for the compositor
     extra_env: dict = field(default_factory=dict)
 
@@ -187,7 +189,9 @@ class SimInstance:
         self.socket_path = paths.socket_dir() / f"{self.name}.sock"
         self.shm_name = f"/visor-{self.name}"
         self.proc: Optional[subprocess.Popen] = None
+        self.mic_proc: Optional[subprocess.Popen] = None
         self.started_at: Optional[float] = None
+        self.notes: list[str] = []  # things that didn't work out but didn't stop the launch
         self._client: Optional[XrClient] = None
         self._log = None
 
@@ -227,8 +231,12 @@ class SimInstance:
         if self.config.gpu is not None:
             env["XRT_COMPOSITOR_FORCE_GPU_INDEX"] = str(self.config.gpu)
         if not self.config.microphone:
-            # No audio server: the app can't hear (or stream) this room.
-            env["PULSE_SERVER"] = "unix:/nonexistent"
+            # The app's audio server is Visor's microphone (or nothing at all):
+            # either way it can't hear, or stream, this room. PipeWire's own
+            # socket is out of reach too, for apps (and ALSA) that skip PulseAudio.
+            env["PULSE_SERVER"] = (f"unix:{xr_mic.pulse_socket(self.name)}" if self.config.virtual_mic
+                                   else "unix:/nonexistent")
+            env["PIPEWIRE_REMOTE"] = "/nonexistent"
         env.update({k: str(v) for k, v in self.config.extra_env.items()})
         return env
 
@@ -247,6 +255,14 @@ class SimInstance:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         paths.socket_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
         self.socket_path.unlink(missing_ok=True)
+        if self.config.virtual_mic and not self.config.microphone:
+            # Up before the app: apps open their microphone once, early, and don't retry.
+            (paths.socket_dir() / f"{self.name}.json").unlink(missing_ok=True)  # stale: would end the new mic
+            try:
+                self.mic_proc = xr_mic.start_helper(self.name, self.run_dir / "mic.log")
+            except (xr_mic.MicError, OSError) as e:
+                self.config.virtual_mic = False
+                self.notes.append(f"no microphone this time: {e}")
         self._log = open(self.run_dir / "app.log", "ab")
         cmd = self.command()
         stdin = subprocess.DEVNULL
@@ -286,6 +302,8 @@ class SimInstance:
             "config": asdict(self.config),
             "run_dir": str(self.run_dir),
             "started_at": self.started_at,
+            "mic": ({"pid": self.mic_proc.pid, "control": str(xr_mic.control_socket(self.name))}
+                    if self.mic_proc else None),
         }
         (self.run_dir / "instance.json").write_text(json.dumps(meta, indent=2))
         (paths.socket_dir() / f"{self.name}.json").write_text(json.dumps(meta))
@@ -351,6 +369,11 @@ class SimInstance:
                         os.kill(child, signal.SIGKILL)
                 except OSError:
                     pass
+        if self.mic_proc is not None:
+            (paths.socket_dir() / f"{self.name}.json").unlink(missing_ok=True)  # its cue to go
+            _end_helper(self.mic_proc.pid, lambda: self.mic_proc.poll() is not None)
+            self.mic_proc.poll()
+            self.mic_proc = None
         if self._log is not None:
             self._log.close()
             self._log = None
@@ -360,6 +383,8 @@ class SimInstance:
     def cleanup(self) -> None:
         self.socket_path.unlink(missing_ok=True)
         (paths.socket_dir() / f"{self.name}.json").unlink(missing_ok=True)
+        xr_mic.pulse_socket(self.name).unlink(missing_ok=True)
+        xr_mic.control_socket(self.name).unlink(missing_ok=True)
         Path("/dev/shm" + self.shm_name).unlink(missing_ok=True)
 
     # -- diagnostics ------------------------------------------------------
@@ -437,7 +462,8 @@ def running() -> list[dict]:
                 meta = json.loads(meta_path.read_text())
             except ValueError:
                 meta = {}
-        entry = {"name": meta.get("name", sock.stem), "socket": str(sock), "managed": bool(meta)}
+        entry = {"name": meta.get("name", sock.stem), "socket": str(sock), "managed": bool(meta),
+                 "mic": sock.with_suffix(".mic").exists()}
         try:
             with XrClient(sock, timeout=3) as c:
                 st = c.state()
@@ -491,10 +517,47 @@ def stop_instance(name: str, timeout: float = 20.0) -> str:
             os.killpg(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+    _stop_mic(name, (meta.get("mic") or {}).get("pid"))
     sock.unlink(missing_ok=True)
     meta_path.unlink(missing_ok=True)
     Path("/dev/shm" + str(meta.get("shm") or f"/visor-{name}")).unlink(missing_ok=True)
     return "stopped"
+
+
+def _end_helper(pid: int, gone, wait: float = 3.0) -> None:
+    """A microphone helper ends itself once its app is gone; this waits for
+    that, and only then insists. (Signalling first is worse than slow: inside
+    an AppImage the signal reaches the runtime, which unmounts the helper's
+    files while it's still shutting down.)"""
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if gone():
+            return
+        time.sleep(0.05)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)  # its own session: the AppImage runtime and wrappers too
+        except (ProcessLookupError, PermissionError):
+            return
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            if gone():
+                return
+            time.sleep(0.05)
+
+
+def _stop_mic(name: str, pid: Optional[int]) -> None:
+    """End an app's microphone helper — only if that pid really is it."""
+    if pid:
+        try:
+            cmdline = Path(f"/proc/{int(pid)}/cmdline").read_bytes().split(b"\0")
+            if name.encode() in cmdline and any(b"mic" in part for part in cmdline):
+                _end_helper(int(pid), lambda: not Path(f"/proc/{int(pid)}").exists()
+                            or Path(f"/proc/{int(pid)}/stat").read_text().split(") ")[-1].startswith("Z"))
+        except (OSError, ValueError):
+            pass
+    xr_mic.pulse_socket(name).unlink(missing_ok=True)
+    xr_mic.control_socket(name).unlink(missing_ok=True)
 
 
 def connect(target: Optional[str] = None) -> XrClient:
