@@ -86,6 +86,13 @@ class TestEnvironment:
         env = sim.environment()
         assert "PULSE_SERVER" not in env and "PIPEWIRE_REMOTE" not in env
 
+    def test_unreal_plays_sound_only_into_visor_s_speakers(self, xr_home):
+        spec = AppSpec(name="g", command=["UnrealEditor", "g.uproject", "-game", "-nosound"], kind="unreal-project")
+        sim = SimInstance(spec, SimConfig(), name="g1")
+        assert "-nosound" in sim.command()  # no Visor audio: it stays silent
+        sim.mic_proc = object()
+        assert "-nosound" not in sim.command()
+
     def test_start_refuses_without_setup(self, xr_home):
         sim = SimInstance(AppSpec(name="a", command=["/bin/true"]), name="t3")
         with pytest.raises(SimError, match="isn't installed"):

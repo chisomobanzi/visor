@@ -98,6 +98,15 @@ def doctor():
         table.add_row("[green]✓[/green]", "speech", f"[dim]{', '.join(have) if have else 'voices download on first use'}[/dim]")
     else:
         table.add_row("[yellow]–[/yellow]", "speech", "optional: pip install 'visor-dev[voice]'")
+    from visor.xr import hearing
+
+    if hearing.available():
+        model = hearing.model_name()
+        table.add_row("[green]✓[/green]", "hearing", f"[dim]whisper {model}"
+                      f"{'' if hearing.installed() else ' (downloads on first use, ~145 MB)'}[/dim]")
+    else:
+        table.add_row("[yellow]–[/yellow]", "hearing", "optional: pip install 'visor-dev[voice]' "
+                      "[dim](sounds are heard either way; words need it)[/dim]")
     console.print(Panel(table, title="virtual headset", expand=False))
     if not ok_all:
         raise typer.Exit(1)
@@ -182,7 +191,8 @@ def run(
     if mic:
         console.print("  [dim]microphone:[/dim] this computer's")
     elif sim.mic_proc:
-        console.print("  [dim]microphone:[/dim] Visor's — talk to it with [bold]visor sim say \"hello\"[/bold]")
+        console.print("  [dim]microphone and speakers:[/dim] Visor's — talk to it with [bold]visor sim say \"hello\"[/bold], "
+                      "hear it with [bold]visor sim hear[/bold]")
     for note in sim.notes:
         console.print(f"  [yellow]{note}[/yellow]")
     if detach:
@@ -505,6 +515,72 @@ def mic(target: Optional[str] = typer.Argument(None, help="Instance name (defaul
     for h in st["history"][-8:]:
         console.print(f"  [dim]{time.strftime('%H:%M:%S', time.localtime(h['at']))}[/dim] {h['label'] or '(audio)'} "
                       f"[dim]{h['duration']:.1f}s[/dim]")
+    sp = st.get("speakers") or {}
+    if sp.get("playing"):
+        console.print(f"[cyan]🔊 playing sound[/cyan] [dim]{sp['level_db']:.0f} dB — hear it with[/dim] visor sim hear")
+    elif sp.get("open"):
+        quiet = sp.get("quiet_for")
+        console.print(f"[dim]🔈 speakers open, quiet{f' for {quiet:.0f}s' if quiet is not None else ''}[/dim]")
+    else:
+        console.print("[dim]🔈 speakers not open (it hasn't played any sound)[/dim]")
+
+
+@sim_app.command()
+def hear(
+    target: Optional[str] = typer.Argument(None, help="Instance name (default: the only one)"),
+    last: float = typer.Option(0.0, "--last", "-l", help="Hear the last N seconds again (up to 180) instead of waiting"),
+    wait: float = typer.Option(10.0, "--wait", "-w", help="Seconds to wait for the app to finish talking"),
+    save: Optional[Path] = typer.Option(None, "--save", "-o", help="Write what was heard to a WAV file"),
+    lang: Optional[str] = typer.Option(None, "--lang", help="The language it speaks (es, fr…), if detection struggles"),
+):
+    """What is the app saying? Waits for it to finish, then writes out its words
+    (offline speech recognition) and describes any other sounds."""
+    from visor.xr import hearing
+    from visor.xr.mic import MicError
+
+    xr = _client(target)
+    try:
+        mic = xr.mic()
+        ears = hearing.Ears(mic, language=lang)
+        paused = xr.state().get("paused")
+        with console.status("listening") as status:
+            def step(seconds: float) -> None:
+                _xr(xr.step, max(1, round(seconds * 72)))
+
+            if last:
+                ears.cursor = time.monotonic() - min(last, 180.0)
+            else:  # from the start of what it's saying now; or wait for it to say something
+                started = ears.utterance_start()
+                if started is None and wait > 0:
+                    status.update("waiting for the app to say something")
+                    deadline = time.monotonic() + wait
+                    while time.monotonic() < deadline and not ears.talking():
+                        step(0.25) if paused else time.sleep(0.25)
+                    started = ears.utterance_start() if ears.talking() else None
+                if started is not None:
+                    ears.cursor = started - 0.3
+            status.update("listening")
+            ears.log = lambda msg: status.update(f"[bold]{msg}[/bold]")
+            heard = ears.hear(wait=0.0 if last else wait, step=step if paused else None, settle=False)
+    except (MicError, hearing.HearingError) as e:
+        _die(str(e))
+    span = f"{heard.end - heard.start:.1f}s"
+    if heard.silent:
+        console.print(f"[dim]🔈 silence ({span})[/dim]")
+    else:
+        console.print(f"[cyan]🔊[/cyan] {heard.describe()}")
+        console.print(f"   [dim]{hearing.level_bar([round(x, 1) for x in _levels(heard)])}  {span}[/dim]")
+    if not hearing.available():
+        console.print("[dim]   words need speech recognition: pip install 'visor-dev[voice]'[/dim]")
+    if save:
+        console.print(f"[dim]   saved {heard.save(save)}[/dim]")
+
+
+def _levels(heard) -> list[float]:
+    from visor.xr.mic import EAR_BLOCK, _db
+
+    s = heard.samples
+    return [_db(s[i:i + EAR_BLOCK]) for i in range(0, len(s), EAR_BLOCK)]
 
 
 @sim_app.command()

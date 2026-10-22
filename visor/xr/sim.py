@@ -254,6 +254,9 @@ class SimInstance:
         cmd = list(self.app.command)
         if self.app.kind == "unreal-project":
             cmd.append(f"-userdir={self.run_dir / 'ue'}")
+        if self.mic_proc is not None:
+            # Its sound goes to Visor's speakers, and only there (the room can't hear it): let it play.
+            cmd = [a for a in cmd if a != "-nosound"]
         return cmd
 
     # -- lifecycle --------------------------------------------------------

@@ -20,7 +20,7 @@ the same game time every replay.
 The speakers are the other way round: they run in real time, as sound cards
 do, and Visor listens to them. Everything the app plays is mixed to mono at
 16 kHz (speech recognition's native rate) and remembered for three minutes,
-to be read back by time.
+for visor.xr.hearing to turn into words and sounds.
 
 Control is JSON lines on ``<name>.mic`` beside the app's own socket.
 """

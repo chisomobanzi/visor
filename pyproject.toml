@@ -49,9 +49,11 @@ app = [
 agent = [
     "anthropic>=1.0",
 ]
-# Speech for the virtual headset's microphone (visor sim say): offline text-to-speech.
+# Speech for the virtual headset: speaking to apps (offline text-to-speech) and
+# hearing what they say (offline speech recognition).
 voice = [
     "piper-tts>=1.3",
+    "faster-whisper>=1.1",
 ]
 
 [project.scripts]
