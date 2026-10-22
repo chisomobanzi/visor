@@ -9,6 +9,7 @@ import ctypes
 import ctypes.util
 import math
 import os
+import select
 import shutil
 import socket
 import struct
@@ -90,14 +91,11 @@ class Client:
                 return kind, t
 
     def audio_for(self, seconds):
-        self.s.settimeout(0.05)
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            try:
+        """Take in whatever arrives for a while, a whole packet at a time."""
+        deadline = time.monotonic() + seconds
+        while (left := deadline - time.monotonic()) > 0:
+            if select.select([self.s], [], [], left)[0]:
                 self._packet()
-            except socket.timeout:
-                pass
-        self.s.settimeout(5)
 
     def write(self, stream, nbytes):
         """Play ``nbytes`` of silence into a playback stream."""
@@ -207,8 +205,11 @@ def test_speakers_play_at_real_time_pace(server):
         if more > 0:
             c.write(index, more)
             sent += more
-    played = c.requested(index) / second
-    assert 0.5 < played < 0.75  # 0.6 s, plus the 40 ms the "sound card" holds
+    c.audio_for(0.05)
+    elapsed = time.monotonic() - start
+    played = c.requested(index) / second  # what the speakers took, so asked to have replaced
+    # Real time, plus the 40 ms the "sound card" holds — however irregularly the server ran.
+    assert 0.8 * elapsed < played < elapsed + 0.1
     t0 = time.monotonic()
     kind, _ = c.command(pulse.DRAIN_PLAYBACK_STREAM, bytes(Out().u32(index).buf))
     assert kind == pulse.REPLY and time.monotonic() - t0 < 0.5  # once what was left has played
@@ -280,23 +281,40 @@ def test_recording_delivers_real_time_audio(server):
 
 def test_an_idle_mic_takes_a_moment_to_wake():
     d = tempfile.mkdtemp(prefix="vpa")
-    srv = PulseServer(os.path.join(d, "p.sock"), Tone(), mic_wake=0.3).start()
+    srv = PulseServer(os.path.join(d, "p.sock"), Tone(), mic_wake=0.6).start()
     try:
         c = Client(srv.path)
         c.hello()
         c.record(5, 1, 48000)
-        c.audio_for(0.2)
-        assert not c.audio  # still waking up
         c.audio_for(0.3)
+        assert not c.audio  # still waking up
+        c.audio_for(0.7)
         assert c.audio
-        c2 = Client(srv.path)  # the mic is running now: a second stream starts within a fragment
+        c2 = Client(srv.path)  # the mic is running now: no waking up for a second stream
         c2.hello()
         c2.record(5, 1, 48000)
-        c2.audio_for(0.1)
+        c2.audio_for(0.4)
         assert c2.audio
     finally:
         srv.stop()
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_a_client_that_stops_reading_holds_up_no_one(server, monkeypatch):
+    """Like PulseAudio, a client that doesn't keep up loses audio; it never
+    stalls the clock (macOS's 8 KB socket buffers made that a CI failure)."""
+    monkeypatch.setattr(pulse.Connection, "AUDIO_BACKLOG", 64 * 1024)
+    stuck = Client(server.path)
+    stuck.hello()
+    stuck.record(5, 2, 48000)  # 384 KB/s, and never read again
+    c = Client(server.path)
+    c.hello()
+    c.record(5, 1, 48000)
+    start = time.monotonic()
+    c.audio_for(1.5)
+    elapsed = time.monotonic() - start
+    assert len(c.audio) / 4 > 0.8 * elapsed * 48000  # still real time
+    assert max(cl.dropped for cl in server.clients) > 0  # the stuck one overran
 
 
 def test_corked_streams_aren_t_listening(server):

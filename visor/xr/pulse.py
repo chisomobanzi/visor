@@ -33,6 +33,7 @@ import sys
 import threading
 import time
 from array import array
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
@@ -376,6 +377,7 @@ class PlaybackStream:
     written: int = 0  # bytes the app has sent: its write index
     played: int = 0  # bytes taken from its buffer by the speakers: the read index
     hw: float = 0.0  # frames inside the "sound card", playing out in real time
+    frac: float = 0.0  # a part-frame of real time the card has played but not yet taken
     owed: int = 0  # taken since we last asked for more
     last: float = 0.0  # when the speakers last ran
     drains: list = field(default_factory=list)  # tags to answer once everything has played
@@ -390,25 +392,62 @@ class PlaybackStream:
 
 @dataclass
 class Connection:
+    """One client. Everything it's sent goes through its own writer thread, so
+    a client that stops reading never holds up the server's clock or anyone
+    else's audio: like PulseAudio, it just loses the audio it didn't take."""
+
+    AUDIO_BACKLOG = 4 * 1024 * 1024  # bytes of unsent audio before it's dropped (> 1 s of anything)
+
     sock: socket.socket
     index: int
     version: int = PROTOCOL_VERSION
     name: str = ""
-    send_lock: threading.Lock = field(default_factory=threading.Lock)
     alive: bool = True
+    dropped: int = 0  # audio bytes this client didn't read in time
+    _queue: deque = field(default_factory=deque)
+    _queued_audio: int = 0
+    _ready: threading.Condition = field(default_factory=threading.Condition)
+
+    def start(self) -> "Connection":
+        threading.Thread(target=self._writer, daemon=True).start()
+        return self
 
     def send(self, payload: bytes, channel: int = INVALID_INDEX) -> None:
-        with self.send_lock:
-            self.write(payload, channel)
+        """Queue one packet. Commands always go; audio is dropped if the
+        client is too far behind."""
+        packet = DESCRIPTOR.pack(len(payload), channel, 0, 0, 0) + payload
+        audio = channel != INVALID_INDEX
+        with self._ready:
+            if not self.alive:
+                return
+            if audio:
+                if self._queued_audio + len(payload) > self.AUDIO_BACKLOG:
+                    self.dropped += len(payload)
+                    return
+                self._queued_audio += len(payload)
+            self._queue.append((packet, len(payload) if audio else 0))
+            self._ready.notify()
 
-    def write(self, payload: bytes, channel: int = INVALID_INDEX) -> None:
-        """Send one packet; the caller holds ``send_lock``."""
-        if not self.alive:
-            return
-        try:
-            self.sock.sendall(DESCRIPTOR.pack(len(payload), channel, 0, 0, 0) + payload)
-        except OSError:
+    def close(self) -> None:
+        with self._ready:
             self.alive = False
+            self._queue.clear()
+            self._ready.notify()
+
+    def _writer(self) -> None:
+        while True:
+            with self._ready:
+                while self.alive and not self._queue:
+                    self._ready.wait()
+                if not self.alive:
+                    return
+                packet, audio = self._queue.popleft()
+                self._queued_audio -= audio
+            try:
+                self.sock.sendall(packet)
+            except OSError:
+                self.close()
+                return
 
     def reply(self, tag: int, out: Optional[Out] = None) -> None:
         self.send(bytes(Out().u32(REPLY).u32(tag).buf + (out.buf if out else b"")))
@@ -486,7 +525,7 @@ class PulseServer:
         with self._lock:
             clients = list(self.clients)
         for c in clients:
-            c.alive = False
+            c.close()
             try:
                 c.sock.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -516,7 +555,7 @@ class PulseServer:
                 return
             conn.settimeout(None)
             with self._lock:
-                c = Connection(conn, self._next_client)
+                c = Connection(conn, self._next_client).start()
                 self._next_client += 1
                 self.clients.append(c)
             threading.Thread(target=self._client_loop, args=(c,), daemon=True).start()
@@ -541,7 +580,7 @@ class PulseServer:
                         if s is not None and s.client is c:
                             s.written += len(payload)
         finally:
-            c.alive = False
+            c.close()
             with self._lock:
                 for idx in [i for i, s in self.streams.items() if s.client is c]:
                     del self.streams[idx]
@@ -599,12 +638,23 @@ class PulseServer:
                 elapsed, s.last = (now - s.last if s.last else 0.0), now
                 fb = s.frame_bytes
                 if not s.corked:
-                    s.hw = max(0.0, s.hw - min(elapsed, 0.1) * s.rate)
-                    room = int(SINK_BUFFER * s.rate - s.hw)
-                    move = max(0, min(room, (s.written - s.played) // fb))
+                    # However late this tick is, the card played in real time all along:
+                    # first what it held, then what it would have pulled from the stream
+                    # meanwhile. (Past what the stream had, that was an underrun: silence,
+                    # not a debt.) A suspended machine isn't owed more than a second.
+                    due = min(elapsed, 1.0) * s.rate
+                    held = min(s.hw, due)
+                    s.hw -= held
+                    want = due - held + s.frac
+                    n = int(want)
+                    buffered = (s.written - s.played) // fb
+                    pulled = min(n, buffered)
+                    s.frac = want - n if pulled == n else 0.0
+                    # Then top the card back up.
+                    move = max(0, min(int(SINK_BUFFER * s.rate - s.hw), buffered - pulled))
                     s.hw += move
-                    s.played += move * fb
-                    s.owed += move * fb
+                    s.played += (pulled + move) * fb
+                    s.owed += (pulled + move) * fb
                 if s.owed and (s.owed >= s.minreq or s.written - s.played < fb):
                     requests.append((s.client, s.index, s.owed))
                     s.owed = 0
@@ -754,7 +804,10 @@ class PulseServer:
         def attr(value: int, default: int) -> int:
             return default if value in (0, INVALID_INDEX) else max(frame, value - value % frame)
 
-        tlength = attr(tlength, max(1, rate // 4) * frame)  # 250 ms
+        # 250 ms unless asked; never under 100 ms. Like PulseAudio, the server has the final say
+        # (clients use the buffer it reports), and a tiny one (SDL asks for ~20 ms) would let a
+        # late tick of this clock starve the stream.
+        tlength = max(attr(tlength, max(1, rate // 4) * frame), max(1, rate // 10) * frame)
         minreq = min(attr(minreq, max(1, rate // 50) * frame), tlength)  # 20 ms
         prebuf = min(attr(prebuf, tlength), tlength)
         maxlength = max(attr(maxlength, 4 * 1024 * 1024), tlength)
@@ -772,10 +825,9 @@ class PulseServer:
             sample = next((k for k, n in FORMAT_BY_NAME.items() if n == fmt), "float32le")
             out.format_info(ENCODING_PCM, {"format.sample_format": f'"{sample}"', "format.rate": str(rate),
                                            "format.channels": str(channels)})
-        with c.send_lock:
-            c.write(bytes(Out().u32(REPLY).u32(tag).buf + out.buf))
-            with self._lock:
-                self.playback[index] = s
+        c.send(bytes(Out().u32(REPLY).u32(tag).buf + out.buf))
+        with self._lock:  # registered after its reply is queued, so nothing for it can overtake the reply
+            self.playback[index] = s
         self.log(f"client {c.index} opened the speakers: {rate} Hz × {channels}" + (f" ({name})" if name else ""))
 
     def _playback(self, c: Connection, idx: int) -> Optional[PlaybackStream]:
@@ -812,7 +864,7 @@ class PulseServer:
         with self._lock:
             s.owed += s.written - s.played  # the dropped audio's room is free again
             s.played = s.written
-            s.hw = 0.0
+            s.hw = s.frac = 0.0
         c.reply(tag)
 
     def _drain_playback(self, c: Connection, tag: int, t: Tags) -> None:
@@ -853,7 +905,7 @@ class PulseServer:
         frame = s.frame_bytes
         with self._lock:
             if tlength not in (0, INVALID_INDEX):
-                s.tlength = max(frame, tlength - tlength % frame)
+                s.tlength = max(tlength - tlength % frame, max(1, s.rate // 10) * frame)
             if minreq not in (0, INVALID_INDEX):
                 s.minreq = min(max(frame, minreq - minreq % frame), s.tlength)
             if prebuf not in (INVALID_INDEX,):
@@ -945,13 +997,12 @@ class PulseServer:
         if v >= 22:
             out.format_info(ENCODING_PCM, {"format.sample_format": f'"{FORMATS[fmt][0]}"',
                                            "format.rate": str(rate), "format.channels": str(channels)})
-        # Reply before the first audio, under the send lock, so the stream exists when its data lands.
-        with c.send_lock:
-            c.write(bytes(Out().u32(REPLY).u32(tag).buf + out.buf))
-            with self._lock:
-                awake = bool(self.streams)  # another stream is recording: the mic is already running
-                s.started = self.clock() + (0.0 if awake else max(0.0, self.mic_wake - fragsize / (frame * rate)))
-                self.streams[index] = s
+        # Queued before the stream is registered, so its first audio can't overtake the reply.
+        c.send(bytes(Out().u32(REPLY).u32(tag).buf + out.buf))
+        with self._lock:
+            awake = bool(self.streams)  # another stream is recording: the mic is already running
+            s.started = self.clock() + (0.0 if awake else max(0.0, self.mic_wake - fragsize / (frame * rate)))
+            self.streams[index] = s
         self.log(f"client {c.index} opened the microphone: {FORMATS[fmt][0]} {rate} Hz × {channels}"
                  + (f" ({name})" if name else "") + (" corked" if corked else ""))
 
