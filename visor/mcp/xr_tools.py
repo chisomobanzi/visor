@@ -132,6 +132,8 @@ def xr_launch(
         "headset": sim.headset.name,
         "interaction_profile": info.get("session", {}).get("interaction_profile"),
         "bound_actions": len(bound),
+        "microphone": "visor (xr_say speaks into it)" if sim.mic_proc else "none",
+        "notes": sim.notes,
         "run_dir": str(sim.run_dir),
         "next": "xr_screenshot to see it; xr_actions to learn its controls",
     }
@@ -399,6 +401,51 @@ def xr_record(seconds: float = 10.0, save_path: Optional[str] = None, app: Optio
 @mcp.tool()
 def xr_replay(script_path: str, app: Optional[str] = None) -> dict:
     """Play back a replay script (from xr_record or a playtest report) on a
-    running app, frame for frame."""
-    data = json.loads(Path(script_path).read_text())
-    return _call(_xr(app).replay, data)
+    running app, frame for frame — including anything that was said."""
+    from visor.xr.mic import MicError
+
+    path = Path(script_path)
+    data = json.loads(path.read_text())
+    try:
+        return _call(_xr(app).replay, data, base_dir=path.resolve().parent)
+    except MicError as e:
+        raise QuestError(str(e)) from None
+
+
+# --------------------------------------------------------------------------
+# the voice
+
+
+@mcp.tool()
+def xr_say(text: str, language: Optional[str] = None, voice: Optional[str] = None, volume: float = 1.0,
+           app: Optional[str] = None, screenshot: bool = True) -> list:
+    """Speak out loud into the headset's microphone: answer the app, pass a
+    mic check, give a voice command. The app hears a natural voice (offline
+    text-to-speech) and nothing else — never this computer's real microphone.
+    `language` speaks another language (es, fr, de, pt, zh…); `volume` 0.3 is
+    softly spoken, 2 is loud. If the app is paused, it runs while you speak."""
+    from visor.xr import voice as tts
+    from visor.xr.mic import MicError
+
+    xr = _xr(app)
+    try:
+        r = xr.say(text, voice=voice, language=language, volume=volume)
+    except (tts.VoiceError, MicError) as e:
+        raise QuestError(str(e)) from None
+    _settle(xr, round((float(r["duration"]) + 0.6) * 72))
+    note = f"said “{r['text']}” ({r['duration']:.1f}s, {r['voice']})"
+    if not r.get("listening"):
+        note += " — the app had no microphone stream open, so it heard nothing"
+    return _shot(xr, note) if screenshot else [note]
+
+
+@mcp.tool()
+def xr_mic(app: Optional[str] = None) -> dict:
+    """Is the app listening (has it opened the microphone)? What has been
+    said to it, and is anything still being spoken?"""
+    from visor.xr.mic import MicError
+
+    try:
+        return _xr(app).mic().status()
+    except MicError as e:
+        raise QuestError(str(e)) from None

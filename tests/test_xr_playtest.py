@@ -230,7 +230,7 @@ def test_mcp_registers_xr_tools():
     from visor.mcp.server import mcp
 
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    assert {"xr_launch", "xr_screenshot", "xr_click", "xr_press", "xr_step", "xr_pause"} <= names
+    assert {"xr_launch", "xr_screenshot", "xr_click", "xr_press", "xr_step", "xr_pause", "xr_say", "xr_mic"} <= names
 
 
 def test_call_dataclass_defaults():

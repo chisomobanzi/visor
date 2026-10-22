@@ -39,8 +39,8 @@ mcp = MCPServer(
         "omitted, the single connected Quest is used automatically. "
         "The xr_* tools run VR apps in Visor's virtual headset (a simulated "
         "Quest 3 on this computer) and let you play them: xr_launch, then "
-        "loop xr_screenshot -> xr_click/xr_press/xr_stick/xr_look. xr_pause "
-        "freezes the world between your turns."
+        "loop xr_screenshot -> xr_click/xr_press/xr_stick/xr_look, and xr_say "
+        "to talk to it. xr_pause freezes the world between your turns."
     ),
 )
 
