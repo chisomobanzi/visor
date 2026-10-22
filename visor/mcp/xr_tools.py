@@ -24,9 +24,11 @@ from visor.mcp.server import QuestError, mcp
 from visor.xr import AppSpec, SimConfig, SimError, SimInstance, XrClient, XrError, connect, running
 
 _MAX_WIDTH = 1024
-# Per app (socket path): size of the last image the model saw, and the sims we started.
+_LISTEN = 8.0  # after an action, let the app finish saying something for up to this long
+# Per app (socket path): size of the last image the model saw, the sims we started, and our ears on it.
 _last_shot: dict[str, tuple[int, int]] = {}
 _sims: dict[str, SimInstance] = {}
+_ears: dict = {}
 
 
 def _xr(app: Optional[str]) -> XrClient:
@@ -56,7 +58,41 @@ def _grid(img: PILImage.Image) -> PILImage.Image:
     return img
 
 
-def _shot(xr: XrClient, note: str = "", grid: bool = False, both: bool = False, save_path: Optional[str] = None):
+def _ears_for(xr: XrClient, since: Optional[float] = None):
+    """Our ears on an app (None if it has no Visor audio): new ones remember the last 30 s."""
+    from visor.xr.hearing import Ears
+    from visor.xr.mic import MicError
+
+    if xr.socket_path not in _ears:
+        try:
+            _ears[xr.socket_path] = Ears(xr.mic(), since=since if since is not None else time.monotonic() - 30.0)
+        except MicError:
+            return None
+    return _ears[xr.socket_path]
+
+
+def _heard(xr: XrClient, wait: float = 0.0, expect: float = 0.0) -> str:
+    """What the app played since the last call (after letting it finish talking), for a tool's note."""
+    from visor.xr.hearing import HearingError
+    from visor.xr.mic import MicError
+
+    ears = _ears_for(xr)
+    if ears is None:
+        return ""
+    paused = wait > 0 and xr.state().get("paused")
+    try:
+        heard = ears.hear(wait=wait, expect=expect,
+                          step=(lambda s: _call(xr.step, max(1, round(s * 72)))) if paused else None)
+    except (MicError, HearingError) as e:
+        return f"(Couldn't listen: {e})"
+    return heard.describe()
+
+
+def _shot(xr: XrClient, note: str = "", grid: bool = False, both: bool = False, save_path: Optional[str] = None,
+          listen: float = _LISTEN):
+    heard = _heard(xr, wait=listen, expect=1.0 if listen else 0.0)
+    if heard:
+        note = f"{note}{'. ' if note else ''}{heard}"
     frame = _call(xr.capture)
     img = frame.image if both else frame.eye("left")
     if save_path:
@@ -124,6 +160,8 @@ def xr_launch(
         sim.stop()
         raise QuestError(str(e)) from None
     _sims[sim.name] = sim
+    _ears.pop(xr.socket_path, None)
+    _ears_for(xr, since=sim.started_clock)  # from launch: the first look hears how it greeted the player
     info = xr.info()
     bound = [a for a in info.get("actions", []) if a["bindings"]]
     return {
@@ -151,6 +189,7 @@ def xr_stop(app: Optional[str] = None) -> dict:
     xr = _xr(app)
     name = next((a["name"] for a in running() if a["socket"] == xr.socket_path), app)
     sim = _sims.pop(name or "", None)
+    _ears.pop(xr.socket_path, None)
     if sim is None:
         from visor.xr.sim import stop_instance
 
@@ -167,12 +206,13 @@ def xr_stop(app: Optional[str] = None) -> dict:
 @mcp.tool()
 def xr_screenshot(app: Optional[str] = None, both_eyes: bool = False, grid: bool = False,
                   save_path: Optional[str] = None) -> list:
-    """See what the headset sees right now (left eye by default). `grid`
-    overlays a labelled 10% grid, handy for picking pixels to click."""
+    """See what the headset sees right now (left eye by default), and hear
+    what the app has said since you last looked. `grid` overlays a labelled
+    10% grid, handy for picking pixels to click."""
     xr = _xr(app)
     if both_eyes:
         _call(xr.configure, eyes="both")
-    return _shot(xr, grid=grid, both=both_eyes, save_path=save_path)
+    return _shot(xr, grid=grid, both=both_eyes, save_path=save_path, listen=0.0)
 
 
 @mcp.tool()
@@ -442,10 +482,42 @@ def xr_say(text: str, language: Optional[str] = None, voice: Optional[str] = Non
 @mcp.tool()
 def xr_mic(app: Optional[str] = None) -> dict:
     """Is the app listening (has it opened the microphone)? What has been
-    said to it, and is anything still being spoken?"""
+    said to it, and is anything still being spoken? Also what its speakers
+    are doing (open, playing, how loud)."""
     from visor.xr.mic import MicError
 
     try:
         return _xr(app).mic().status()
     except MicError as e:
         raise QuestError(str(e)) from None
+
+
+@mcp.tool()
+def xr_hear(app: Optional[str] = None, wait_seconds: float = 8.0, again_seconds: Optional[float] = None,
+            save_path: Optional[str] = None) -> dict:
+    """Listen to the app: what it has said (transcribed offline) and what
+    other sounds it played, since you last heard it. Every action tool already
+    tells you this; use xr_hear to wait for it to finish talking
+    (`wait_seconds`, stepping a paused app), or to hear the last few seconds
+    again (`again_seconds`, up to 180). `save_path` writes the audio as a WAV.
+    Speech recognition can mishear names: trust the screen when they disagree."""
+    from visor.xr.hearing import Ears, HearingError
+    from visor.xr.mic import MicError
+
+    xr = _xr(app)
+    try:
+        if again_seconds:
+            heard = Ears(xr.mic(), since=time.monotonic() - min(float(again_seconds), 180.0)).hear(settle=False)
+        else:
+            ears = _ears_for(xr)
+            if ears is None:
+                raise QuestError("this app has no Visor audio (it was started with --mic, or outside the simulator)")
+            paused = wait_seconds > 0 and xr.state().get("paused")
+            heard = ears.hear(wait=max(0.0, wait_seconds),
+                              step=(lambda s: _call(xr.step, max(1, round(s * 72)))) if paused else None)
+    except (MicError, HearingError) as e:
+        raise QuestError(str(e)) from None
+    out = {"heard": heard.describe() or "Nothing: the app was silent.", **heard.to_json()}
+    if save_path and not heard.silent:
+        out["audio"] = str(heard.save(save_path))
+    return out
