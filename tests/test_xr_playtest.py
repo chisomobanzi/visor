@@ -146,6 +146,7 @@ class TestClaudeBrain:
         req = fake.requests[0]
         assert req["model"] == "claude-opus-5-5"
         assert req["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in req["betas"]
+        assert req["thinking"] == {"type": "adaptive", "display": "summarized"}  # readable reasoning
         user = req["messages"][0]["content"]
         assert user[1]["type"] == "image" and user[1]["source"]["media_type"] == "image/jpeg"
         assert "First-timer" in req["system"][0]["text"]
@@ -159,6 +160,19 @@ class TestClaudeBrain:
         assert result["type"] == "tool_result" and result["tool_use_id"] == "tu_1"
         assert any(block["type"] == "image" for block in result["content"])
         assert b.usage()["requests"] == 2
+
+    def test_reasoning_in_thinking_blocks_becomes_the_thought(self, monkeypatch):
+        """Opus 5.5 reasons between tool calls in thinking blocks, not text."""
+        import anthropic
+
+        msgs = FakeMessages([_response(SimpleNamespace(type="thinking", thinking="Get Started looks like the way in.",
+                                                       signature="sig"),
+                                       _tool("click", {"x": 1, "y": 2}))])
+        monkeypatch.setattr(anthropic, "Anthropic",
+                            lambda *a, **k: SimpleNamespace(beta=SimpleNamespace(messages=msgs)))
+        b = brains.ClaudeBrain()
+        b.start(_ctx())
+        assert b.first(_obs())[0].thought == "Get Started looks like the way in."
 
     def test_refusal_finishes_cleanly(self, monkeypatch):
         import anthropic

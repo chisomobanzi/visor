@@ -294,6 +294,9 @@ class ClaudeBrain(Brain):
                 system=[{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral"}}],
                 tools=TOOLS,
                 messages=self.messages,
+                # Opus 5.5 reasons between tool calls in thinking blocks; "summarized" makes them
+                # readable for the report (it changes visibility only, not what's billed).
+                thinking={"type": "adaptive", "display": "summarized"},
                 output_config={"effort": self.effort},
                 cache_control={"type": "ephemeral"},
                 context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
@@ -314,7 +317,10 @@ class ClaudeBrain(Brain):
         if response.stop_reason == "refusal":
             self.stopped = "the model declined to continue"
             return [Call("finish", {"goal_achieved": False, "summary": self.stopped, "rating": 0})]
-        thought = " ".join(b.text for b in response.content if b.type == "text").strip()
+        # What it said, or failing that what it thought (thinking blocks are kept, unchanged, in
+        # the transcript above: they're bound to this conversation and must go back as received).
+        thought = " ".join(b.text for b in response.content if b.type == "text").strip() or " ".join(
+            (getattr(b, "thinking", "") or "") for b in response.content if b.type == "thinking").strip()
         calls = [Call(b.name, dict(b.input), id=b.id, thought=thought)
                  for b in response.content if b.type == "tool_use"]
         if not calls:
