@@ -20,9 +20,11 @@ import shlex
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -158,6 +160,54 @@ def _first_to_go(pid: int) -> None:
         pass
 
 
+@lru_cache(maxsize=1)
+def _can_scope() -> bool:
+    """Is there a systemd user manager to give each app its own scope?"""
+    if not shutil.which("systemd-run") or os.environ.get("VISOR_XR_NO_SCOPE"):
+        return False
+    try:
+        return subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "true"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _own_scope(name: str) -> list[str]:
+    """A prefix that starts the app in a systemd scope of its own (it execs, so
+    the pid is the app's). Otherwise it shares the scope of whatever started
+    Visor, an IDE's terminal say: when memory runs out and the kernel ends the
+    app, as _first_to_go asks, systemd then stops that whole scope, IDE and all."""
+    if not _can_scope():
+        return []
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--description=Visor sim {name}", "--"]
+
+
+MIN_FREE_MB = 1024  # stop the app before the computer runs out of memory (VISOR_XR_MIN_FREE_MB; 0: never)
+LOW_MEMORY_SECONDS = 5  # ...after this long below it
+LOW_MEMORY_SETTLE = 10.0  # after closing one app for memory, give the system this long before closing another
+_memory_lock = threading.Lock()
+_memory_closed_at = [-LOW_MEMORY_SETTLE]  # a fleet's copies share one low: end one at a time, not all
+
+
+def min_free_mb() -> int:
+    try:
+        return int(os.environ.get("VISOR_XR_MIN_FREE_MB", MIN_FREE_MB))
+    except ValueError:
+        return MIN_FREE_MB
+
+
+def mem_available_mb() -> Optional[int]:
+    """Memory the system can still hand out without swapping, or None off Linux."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def _proc_children(pid: int) -> list[int]:
     out = []
     for stat in Path("/proc").glob("[0-9]*/stat"):
@@ -203,6 +253,7 @@ class SimInstance:
         self.started_at: Optional[float] = None
         self.started_clock: Optional[float] = None  # the same moment on the monotonic clock
         self.notes: list[str] = []  # things that didn't work out but didn't stop the launch
+        self.stopped_for: Optional[str] = None  # why Visor ended the app itself, if it did
         self._client: Optional[XrClient] = None
         self._log = None
 
@@ -289,7 +340,7 @@ class SimInstance:
             stdin = os.open(fifo, os.O_RDWR)
         try:
             self.proc = subprocess.Popen(
-                cmd,
+                _own_scope(self.name) + cmd,
                 cwd=self.app.cwd,
                 env=self.environment(),
                 stdin=stdin,
@@ -304,7 +355,40 @@ class SimInstance:
         self.started_at = time.time()
         self.started_clock = time.monotonic()
         self._write_meta(cmd)
+        if min_free_mb() > 0 and mem_available_mb() is not None:
+            threading.Thread(target=self._watch_memory, name=f"memory {self.name}", daemon=True).start()
         return self
+
+    def _watch_memory(self) -> None:
+        """End the app before the computer runs out of memory. The kernel would
+        end it first anyway (_first_to_go), but only once everything else has
+        been swapped out to a crawl; and this way the report can say why."""
+        floor = min_free_mb()
+        low_since = None
+        while self.alive():
+            free = mem_available_mb()
+            if free is None or free >= floor:
+                low_since = None
+            elif low_since is None:
+                low_since = time.monotonic()
+            elif time.monotonic() - low_since >= LOW_MEMORY_SECONDS:
+                with _memory_lock:
+                    if time.monotonic() - _memory_closed_at[0] < LOW_MEMORY_SETTLE:
+                        low_since = None  # another copy was just closed; see if that was enough
+                        time.sleep(1.0)
+                        continue
+                    _memory_closed_at[0] = time.monotonic()
+                self.stopped_for = (f"the computer was running out of memory ({free} MB left), so Visor "
+                                    "closed the app to protect everything else running")
+                try:
+                    self.proc.send_signal(signal.SIGTERM)
+                    self.proc.wait(timeout=10)  # an app stuck loading won't hear it
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                except OSError:
+                    pass
+                return
+            time.sleep(1.0)
 
     def _write_meta(self, cmd: list[str]) -> None:
         meta = {
@@ -415,6 +499,18 @@ class SimInstance:
     def crash(self) -> Optional[dict]:
         """What went wrong, if the app crashed: message and callstack."""
         return detect_crash(self.run_dir, self.app)
+
+    def ended_by(self) -> Optional[str]:
+        """Why the app is gone when that isn't the app's fault: Visor closed
+        it for memory, or something outside killed it without a crash report
+        (on a desktop that's nearly always the kernel, out of memory)."""
+        if self.stopped_for:
+            return self.stopped_for
+        code = self.proc.poll() if self.proc else None
+        if code == -signal.SIGKILL and not self.crash():
+            return ("the system killed the app (SIGKILL, no crash report): almost always because the "
+                    "computer ran out of memory")
+        return None
 
     def crash_summary(self, default: str = "") -> str:
         c = self.crash()

@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 
 import pytest
 
@@ -143,6 +144,107 @@ def test_simulated_apps_go_first_when_memory_runs_out():
     finally:
         p.kill()
         p.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc")
+class TestMemory:
+    """Running out of memory must cost only the simulated app, never what the
+    user started it from (an IDE's terminal) or the run's report."""
+
+    def _app(self, tmp_path, *cmd):
+        import subprocess
+
+        inst = SimInstance(AppSpec(name="sleeper", command=list(cmd)), run_dir=tmp_path)
+        inst.proc = subprocess.Popen(list(cmd))
+        return inst
+
+    def test_apps_get_a_scope_of_their_own(self):
+        """Otherwise an OOM kill of the app makes systemd stop the scope it
+        shares with whatever launched Visor: Rider went down with one."""
+        import subprocess
+
+        from visor.xr import sim
+
+        sim._can_scope.cache_clear()
+        if not sim._can_scope():
+            pytest.skip("no systemd user manager")
+        p = subprocess.Popen(sim._own_scope("test") + ["sleep", "5"])
+        try:
+            for _ in range(50):  # systemd-run execs the app once the scope exists
+                if open(f"/proc/{p.pid}/comm").read().strip() == "sleep":
+                    break
+                time.sleep(0.05)
+            ours = open("/proc/self/cgroup").read()
+            theirs = open(f"/proc/{p.pid}/cgroup").read()
+            assert theirs != ours and theirs.strip().endswith(".scope")
+        finally:
+            p.kill()
+            p.wait()
+
+    def test_no_scope_without_systemd(self, monkeypatch):
+        from visor.xr import sim
+
+        monkeypatch.setenv("VISOR_XR_NO_SCOPE", "1")
+        sim._can_scope.cache_clear()
+        try:
+            assert sim._own_scope("test") == []
+        finally:
+            sim._can_scope.cache_clear()
+
+    def test_low_memory_closes_the_app_and_says_why(self, tmp_path, monkeypatch):
+        from visor.xr import sim
+
+        monkeypatch.setattr(sim, "mem_available_mb", lambda: 400)
+        monkeypatch.setattr(sim, "LOW_MEMORY_SECONDS", 0)
+        monkeypatch.setattr(sim, "_memory_closed_at", [-sim.LOW_MEMORY_SETTLE])
+        inst = self._app(tmp_path, "sleep", "30")
+        inst._watch_memory()
+        assert inst.proc.poll() is not None
+        assert "running out of memory (400 MB left)" in inst.ended_by()
+
+    def test_a_fleet_loses_one_copy_at_a_time(self, tmp_path, monkeypatch):
+        """Twenty copies see the same low; closing one may be enough."""
+        import threading
+
+        from visor.xr import sim
+
+        monkeypatch.setattr(sim, "mem_available_mb", lambda: 400)
+        monkeypatch.setattr(sim, "LOW_MEMORY_SECONDS", 0)
+        monkeypatch.setattr(sim, "_memory_closed_at", [-sim.LOW_MEMORY_SETTLE])
+        copies = [self._app(tmp_path / str(n), "sleep", "30") for n in range(3)]
+        watchers = [threading.Thread(target=c._watch_memory, daemon=True) for c in copies]
+        try:
+            for w in watchers:
+                w.start()
+            time.sleep(3)
+            assert sum(c.proc.poll() is not None for c in copies) == 1
+        finally:
+            for c in copies:
+                c.proc.kill()
+                c.proc.wait()
+
+    def test_enough_memory_leaves_it_alone(self, tmp_path, monkeypatch):
+        from visor.xr import sim
+
+        monkeypatch.setattr(sim, "mem_available_mb", lambda: 8000)
+        inst = self._app(tmp_path, "sleep", "1.5")
+        inst._watch_memory()  # returns when the app ends on its own
+        assert inst.proc.returncode == 0 and inst.ended_by() is None
+
+    def test_a_kill_without_a_crash_report_is_the_kernel(self, tmp_path):
+        inst = self._app(tmp_path, "sleep", "30")
+        inst.proc.kill()
+        inst.proc.wait()
+        assert "ran out of memory" in inst.ended_by()
+
+    def test_floor_is_configurable(self, monkeypatch):
+        from visor.xr import sim
+
+        monkeypatch.setenv("VISOR_XR_MIN_FREE_MB", "0")
+        assert sim.min_free_mb() == 0
+        monkeypatch.setenv("VISOR_XR_MIN_FREE_MB", "lots")
+        assert sim.min_free_mb() == sim.MIN_FREE_MB
+        assert sim.mem_available_mb() > 0
 
 
 class TestInstallHints:
