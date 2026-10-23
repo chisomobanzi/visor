@@ -77,7 +77,7 @@ def install_hint(extra: str) -> str:
     packages (a pip install wouldn't reach pipx's private environment)."""
     if os.environ.get("APPIMAGE"):
         return "this AppImage was built without them; rebuild it with packaging/appimage/build-appimage.sh"
-    if f"{os.sep}pipx{os.sep}venvs{os.sep}" in sys.prefix:
+    if "/pipx/venvs/" in sys.prefix.replace("\\", "/"):
         return f"pipx inject visor-dev {EXTRAS[extra]}"
     return f"pip install 'visor-dev[{extra}]'"
 

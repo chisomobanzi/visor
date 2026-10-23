@@ -336,18 +336,18 @@ class TestStalls:
         return t
 
     def test_a_long_freeze_is_measured(self, tmp_path, monkeypatch):
-        t = self._test(tmp_path, monkeypatch, step_seconds=0.3)
+        t = self._test(tmp_path, monkeypatch, step_seconds=0.5)
         try:
             frozen, took = t._advance(72)
-            assert 0.2 <= frozen <= took < 1.0
+            assert 0.35 <= frozen <= took < 2.0  # counted from the action's start; CI timers run late
         finally:
             t.sim.proc.kill()
 
     def test_drawing_is_not_a_freeze(self, tmp_path, monkeypatch):
-        t = self._test(tmp_path, monkeypatch, step_seconds=0.3, drawn=lambda n: n)
+        t = self._test(tmp_path, monkeypatch, step_seconds=0.5, drawn=lambda n: n)
         try:
             frozen, took = t._advance(72)
-            assert frozen < 0.1 and took >= 0.3
+            assert frozen < 0.25 and took >= 0.5
         finally:
             t.sim.proc.kill()
 

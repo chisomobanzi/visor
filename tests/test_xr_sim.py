@@ -258,6 +258,8 @@ class TestInstallHints:
         monkeypatch.delenv("APPIMAGE", raising=False)
         monkeypatch.setattr(paths.sys, "prefix", "/home/u/.local/share/pipx/venvs/visor-dev")
         assert paths.install_hint("voice") == "pipx inject visor-dev piper-tts faster-whisper"
+        monkeypatch.setattr(paths.sys, "prefix", r"C:\Users\u\pipx\venvs\visor-dev")  # Windows
+        assert paths.install_hint("agent") == "pipx inject visor-dev anthropic"
 
     def test_cli_errors_keep_their_square_brackets(self, capsys):
         """Rich read [agent] as markup and printed `pip install 'visor-dev'`."""

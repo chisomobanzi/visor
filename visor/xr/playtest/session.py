@@ -363,15 +363,17 @@ class Playtest:
         def watch() -> None:
             last, changed, told = None, start, start
             with XrClient(sim.socket_path, timeout=5.0) as probe:
-                while not done.wait(STALL_POLL):
+                while True:  # first look straight away: a freeze counts from the action's start
                     try:
                         drawn = probe.state()["render_frame"]
                     except (XrError, KeyError, TypeError):
                         if not sim.alive():
                             return
-                        continue  # a wedged layer: the step's own timeout covers that
+                        drawn = last  # a wedged layer: the step's own timeout covers that
                     now = time.monotonic()
-                    if drawn != last:
+                    if last is None:
+                        last = drawn
+                    elif drawn != last:
                         last, changed = drawn, now
                     longest[0] = max(longest[0], now - changed)
                     if now - changed >= STALL_LIMIT:
@@ -386,6 +388,8 @@ class Playtest:
                         told = now
                         self._emit("status", message=f"the app hasn't drawn anything for {_duration(now - changed)}"
                                                      " (loading?); waiting without using up actions")
+                    if done.wait(STALL_POLL):
+                        return
 
         watcher = threading.Thread(target=watch, name="stall watch", daemon=True)
         watcher.start()
