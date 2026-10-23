@@ -143,14 +143,15 @@ def write_html(report: dict, out: Path) -> Path:
     cost = brain.get("estimated_cost_usd")
     brain_line = (f"{_e(brain.get('model') or brain.get('kind'))} · {brain.get('requests', 0)} requests"
                   f"{f' · ≈ ${cost:.2f}' if cost is not None else ''}") if brain.get("kind") == "claude" \
-        else f"scripted monkey · seed {brain.get('seed', 0)}"
+        else (f"{_e(brain.get('client') or 'an agent')} over MCP · {brain.get('moves', 0)} moves"
+              if brain.get("kind") == "agent" else f"scripted monkey · seed {brain.get('seed', 0)}")
     no_video = ("No video: recording was off for this run." if (report.get("config") or {}).get("video") is False
                 else "No video (ffmpeg not found).")
     video = f'<video controls preload="metadata" src="{_e(arts["video"])}"></video>' if arts.get("video") else \
         f'<p class="muted">{no_video}</p>'
     chart = _frame_chart(out.parent / arts["frames"], refresh, report.get("paused_frames")) if arts.get("frames") else ""
     verdict_cls = "good" if achieved else ("bad" if achieved is False else "")
-    scripted = brain.get("kind") != "claude"
+    scripted = brain.get("kind") == "monkey"
     verdict_txt = "Goal reached" if achieved else ("Goal not reached" if achieved is False else
                                                    ("Scripted run" if scripted else "No verdict"))
     if report.get("stopped_for") and not achieved:  # cut short: the agent never got to judge

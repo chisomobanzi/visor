@@ -565,6 +565,8 @@ class Playtest:
                     if not self.sim.alive():
                         raise
                     text, f = f"That didn't work: {e}", 0
+                except (KeyError, ValueError, TypeError) as e:  # a move with bad arguments (from MCP, say)
+                    text, f = f"That move's arguments didn't make sense ({e!r}).", 0
                 frames += f
                 acted = acted or f > 0
                 results.append((call, text))

@@ -124,7 +124,7 @@ Then ask your assistant things like:
 
 Tools exposed: `quest_devices`, `quest_info`, `quest_screenshot`, `quest_install`, `quest_uninstall`, `quest_launch`, `quest_stop`, `quest_app_list`, `quest_app_info`, `quest_app_memory`, `quest_clear_data`, `quest_logs`, `quest_logs_stream`, `quest_crash_logs`, `quest_performance`, `quest_monitor`, `quest_thermal`, `quest_frame_timing`, `quest_perf_session`, `quest_perf_diff`, `quest_launch_benchmark`, `quest_trace`, `quest_screen_record`, `quest_push`, `quest_pull`, `quest_files`, `quest_connect_wireless`, `quest_set_refresh_rate`, `quest_tracking`, `quest_list_builds`, `quest_audit_build`, `quest_upload_build`.
 
-Virtual headset (see [below](#virtual-headset)): `xr_launch`, `xr_list`, `xr_stop`, `xr_screenshot`, `xr_actions`, `xr_click`, `xr_point`, `xr_press`, `xr_hold`, `xr_stick`, `xr_look`, `xr_walk`, `xr_move_hand`, `xr_press_action`, `xr_pause`, `xr_resume`, `xr_step`, `xr_stats`, `xr_events`, `xr_system_event`, `xr_logs`, `xr_record`, `xr_replay`, `xr_say`, `xr_mic`, `xr_hear`.
+Virtual headset (see [below](#virtual-headset)): `xr_launch`, `xr_list`, `xr_stop`, `xr_screenshot`, `xr_actions`, `xr_click`, `xr_point`, `xr_press`, `xr_hold`, `xr_stick`, `xr_look`, `xr_walk`, `xr_move_hand`, `xr_press_action`, `xr_pause`, `xr_resume`, `xr_step`, `xr_stats`, `xr_events`, `xr_system_event`, `xr_logs`, `xr_record`, `xr_replay`, `xr_say`, `xr_mic`, `xr_hear`, `xr_playtest_start`, `xr_playtest_act`, `xr_playtest_look`, `xr_playtest_stop`.
 
 ## Virtual headset
 
@@ -188,6 +188,8 @@ A playtester is Claude (`claude-opus-5-5`, needs `ANTHROPIC_API_KEY`) in charact
 - `video.mp4`, `frames.json` (per-frame timing), `app.log`, and the engine's crash report if there was one
 
 The dashboard's **PLAYTESTS** page runs them and keeps the reports.
+
+**No key: let Claude Code play.** The `xr_playtest_*` MCP tools give the same seat to the assistant you're already talking to, on its own plan. Ask *"playtest ~/Projects/Game as a first-timer"*: `xr_playtest_start` boots the app and hands over the persona, the goal and the first frame; each `xr_playtest_act` makes moves (the same vocabulary as above: click, press, say, report_issue, finish…) and answers with the next frame and what the app said. Visor plays each move out with the same oracles watching and writes the same report, replay and video.
 
 ### Fleets
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import queue
 import random
 from dataclasses import dataclass, field
 from typing import Optional
@@ -355,6 +356,78 @@ class ClaudeBrain(Brain):
         t["estimated_cost_usd"] = round(cost, 4) if self.model == "claude-opus-5-5" else None
         t["model"] = self.model
         return t
+
+
+# --------------------------------------------------------------------------
+# Another agent, over MCP
+
+
+class AgentBrain(Brain):
+    """Another agent plays: Claude Code, or any MCP client, through the
+    xr_playtest_* tools, on its own model and plan (no API key here). The
+    playtest runs in a thread of its own and waits in first()/next() for the
+    agent's moves; the agent waits in view() for what they led to."""
+
+    name = "agent"
+
+    def __init__(self, patience: float = 1800.0, client: str = ""):
+        self.patience = patience  # seconds to wait for a move before calling the playtest off
+        self.client = client  # who's playing, as the MCP client named itself
+        self._moves: queue.Queue = queue.Queue()
+        self._views: queue.Queue = queue.Queue()
+        self.last: Optional[tuple[Observation, list]] = None
+        self.moves = 0
+
+    def first(self, obs: Observation) -> list[Call]:
+        return self._turn(obs, [])
+
+    def next(self, results: list[tuple[Call, str]], obs: Observation) -> list[Call]:
+        return self._turn(obs, results)
+
+    def _turn(self, obs: Observation, results: list) -> list[Call]:
+        self._views.put((obs, results))
+        try:
+            calls = self._moves.get(timeout=self.patience)
+        except queue.Empty:
+            calls = None
+        if calls is None:
+            why = "the playtester called it off" if not self.patience else "the playtester stopped responding"
+            return [Call("finish", {"goal_achieved": False, "summary": f"Stopped early: {why}."})]
+        self.moves += 1
+        return calls
+
+    # the agent's side
+
+    def view(self, timeout: float) -> Optional[tuple[Observation, list]]:
+        """The next thing to look at, once the app has played out the last move."""
+        try:
+            view = self._views.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if view is not None:  # None: the playtest is over
+            self.last = view
+        return view
+
+    def move(self, calls: list[Call]) -> None:
+        self._moves.put(calls)
+
+    def stop(self) -> None:
+        self.patience = 0.0
+        self._moves.put(None)
+
+    def usage(self) -> dict:
+        return {"client": self.client, "moves": self.moves}
+
+
+def tool_guide() -> str:
+    """The move vocabulary as short lines, for an agent that plays through MCP."""
+    lines = []
+    for t in TOOLS:
+        props = t["input_schema"].get("properties", {})
+        need = t["input_schema"].get("required", [])
+        args = ", ".join(a if a in need else f"{a}?" for a in props)
+        lines.append(f"- {t['name']}({args}): {t['description']}")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------

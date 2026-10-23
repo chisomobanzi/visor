@@ -41,7 +41,9 @@ mcp = MCPServer(
         "Quest 3 on this computer) and let you play them: xr_launch, then "
         "loop xr_screenshot -> xr_click/xr_press/xr_stick/xr_look; xr_say to "
         "talk to it, and every result says what the app said back (xr_hear "
-        "to listen longer). xr_pause freezes the world between your turns."
+        "to listen longer). xr_pause freezes the world between your turns. "
+        "xr_playtest_start runs a full playtest with you as the player, in "
+        "character, and writes a bug report with video and a replay script."
     ),
 )
 
@@ -727,7 +729,7 @@ def quest_upload_build(
 
 
 # The virtual-headset tools register themselves on the same server.
-from visor.mcp import xr_tools  # noqa: E402,F401
+from visor.mcp import playtest_tools, xr_tools  # noqa: E402,F401
 
 
 def main():
