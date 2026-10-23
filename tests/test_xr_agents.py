@@ -1,11 +1,102 @@
-"""Another agent as the playtester, over MCP."""
+"""Who plays a playtest: the saved Anthropic key, and another agent over MCP."""
 
+import os
+import stat
+import sys
 import threading
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 
+from visor.xr.playtest import credentials
 from visor.xr.playtest.brains import AgentBrain, Call, Observation
+
+KEY = "sk-ant-api03-" + "x" * 80 + "Wxyz"
+
+
+@pytest.fixture(autouse=True)
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(tmp_path / "anthropic"))
+    for var in credentials.ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(credentials, "check", lambda key: None)  # never ask Anthropic from a test
+    return tmp_path
+
+
+class TestCredentials:
+    def test_nothing_at_first(self):
+        assert credentials.source() is None and credentials.client_kwargs() == {}
+
+    def test_a_saved_key_is_used_and_only_its_end_shown(self):
+        saved = credentials.save(f"  {KEY}\n")
+        assert saved["label"] == "your saved key …Wxyz" and KEY not in str(saved)
+        assert credentials.source() == {"kind": "saved", "label": "your saved key …Wxyz"}
+        assert credentials.client_kwargs() == {"api_key": KEY}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_only_you_can_read_it(self):
+        credentials.save(KEY)
+        assert stat.S_IMODE(os.stat(credentials.key_path()).st_mode) == 0o600
+
+    def test_the_environment_wins(self, monkeypatch):
+        credentials.save(KEY)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+        assert credentials.source()["kind"] == "env"
+        assert credentials.client_kwargs() == {}  # the SDK reads the environment itself
+
+    def test_an_ant_login_profile_counts(self, home):
+        (home / "anthropic" / "credentials").mkdir(parents=True)
+        (home / "anthropic" / "credentials" / "default.json").write_text("{}")
+        assert credentials.source()["kind"] == "profile" and credentials.client_kwargs() == {}
+
+    def test_a_refused_key_is_not_kept(self, monkeypatch):
+        def refuse(key):
+            raise credentials.CredentialsError("Anthropic didn't accept that key.")
+
+        monkeypatch.setattr(credentials, "check", refuse)
+        with pytest.raises(credentials.CredentialsError):
+            credentials.save(KEY)
+        assert not credentials.key_path().exists()
+
+    def test_junk_is_refused_without_asking(self):
+        for junk in ("", "   ", "sk-ant two words"):
+            with pytest.raises(credentials.CredentialsError):
+                credentials.save(junk)
+
+    def test_forget(self):
+        credentials.save(KEY)
+        assert credentials.forget() and credentials.source() is None and not credentials.forget()
+
+    def test_the_check_tells_a_wrong_key_from_no_network(self, monkeypatch):
+        """Against the real SDK, with the HTTP layer faked."""
+        anthropic = pytest.importorskip("anthropic")
+        try:
+            import httpx2 as httpx  # what the SDK speaks HTTP with since 1.x
+        except ImportError:
+            import httpx
+
+        monkeypatch.undo()  # the real check
+        statuses = iter([401, 200])
+
+        def handler(request):
+            assert request.url.path.endswith("/v1/models/claude-opus-5-5")
+            code = next(statuses)
+            body = ({"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+                    if code == 401 else {"type": "model", "id": "claude-opus-5-5", "display_name": "Claude Opus 5.5",
+                                         "created_at": "2026-01-01T00:00:00Z"})
+            return httpx.Response(code, json=body)
+
+        real = anthropic.Anthropic
+
+        def fake(**kw):
+            return real(**kw, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+        monkeypatch.setattr(anthropic, "Anthropic", fake)
+        with pytest.raises(credentials.CredentialsError, match="didn't accept"):
+            credentials.check(KEY)
+        assert credentials.check(KEY) is None
 
 
 def _obs(n=0):
@@ -96,3 +187,35 @@ class TestMcpMoves:
         out = self._act([{"tool": "wait", "seconds": 1}])
         assert isinstance(out[0], McpImage)
         assert out[1].startswith("wait: frame 3") and "(playtest pt-test;" in out[1]
+
+
+class TestDashboardKey:
+    @pytest.fixture
+    def client(self):
+        from visor.ui.server import app
+
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_save_show_forget(self, client):
+        assert client.get("/api/xr/claude").json() == {"ready": False}
+        r = client.post("/api/xr/claude", json={"key": KEY})
+        assert r.status_code == 200 and r.json()["label"] == "your saved key …Wxyz" and KEY not in r.text
+        assert client.get("/api/xr/claude").json()["ready"] is True
+        assert client.delete("/api/xr/claude").json() == {"ready": False}
+
+    def test_a_refused_key_says_why(self, client, monkeypatch):
+        def refuse(key):
+            raise credentials.CredentialsError("Anthropic didn't accept that key.")
+
+        monkeypatch.setattr(credentials, "check", refuse)
+        r = client.post("/api/xr/claude", json={"key": KEY})
+        assert r.status_code == 400 and "didn't accept" in r.json()["detail"] and KEY not in r.text
+
+    def test_claude_playtests_need_a_key_first(self, client):
+        r = client.post("/api/xr/playtest", json={"target": "demo", "brain": "claude"})
+        assert r.status_code == 400 and "API key" in r.json()["detail"]
+
+    def test_another_site_cannot_post_a_key(self, client):
+        """A cross-site form can only send text/plain or form data, which the route refuses."""
+        r = client.post("/api/xr/claude", content=f'{{"key": "{KEY}"}}', headers={"content-type": "text/plain"})
+        assert r.status_code == 422 and not credentials.key_path().exists()

@@ -128,6 +128,12 @@ def doctor():
     else:
         table.add_row("[yellow]–[/yellow]", "hearing", f"optional: {_hint('voice')} "
                       "[dim](sounds are heard either way; words need it)[/dim]")
+    from visor.xr.playtest import credentials
+
+    signed_in = credentials.source()
+    table.add_row("[green]✓[/green]" if signed_in else "[yellow]–[/yellow]", "Claude playtester",
+                  f"[dim]{escape(signed_in['label'])}[/dim]" if signed_in else
+                  "optional: [bold]visor sim login[/bold] [dim](or play it yourself from Claude Code: xr_playtest_start)[/dim]")
     console.print(Panel(table, title="virtual headset", expand=False))
     if not ok_all:
         raise typer.Exit(1)
@@ -662,6 +668,41 @@ def personas():
 
 
 @sim_app.command()
+def login(key_stdin: bool = typer.Option(False, "--key-stdin", help="Read the key from stdin instead of asking")):
+    """Save an Anthropic API key for the Claude playtester (only you can read it)."""
+    import sys
+
+    from visor.xr.playtest import credentials
+
+    if key_stdin or not sys.stdin.isatty():
+        key = sys.stdin.readline()
+    else:
+        console.print("Paste an Anthropic API key [dim](console.anthropic.com → API Keys; it won't show as you type)[/dim]")
+        key = typer.prompt("key", hide_input=True, prompt_suffix=": ")
+    try:
+        with console.status("checking it with Anthropic…"):
+            saved = credentials.save(key)
+    except credentials.CredentialsError as e:
+        _die(str(e))
+    except ImportError:
+        _die(f"the Claude playtester needs the anthropic package: {_hint('agent')}")
+    console.print(f"[green]✓[/green] saved {escape(saved['label'])}  [dim]{escape(saved['path'])}, readable only by you[/dim]")
+    if saved["note"]:
+        console.print(f"  [yellow]{escape(saved['note'])}[/yellow]")
+    for var in credentials.ENV_VARS:
+        if os.environ.get(var):
+            console.print(f"  [yellow]{var} is set in this shell, and it wins over the saved key while it is[/yellow]")
+
+
+@sim_app.command()
+def logout():
+    """Forget the Anthropic API key saved with `visor sim login`."""
+    from visor.xr.playtest import credentials
+
+    console.print("forgot the saved key" if credentials.forget() else "[dim]no saved key to forget[/dim]")
+
+
+@sim_app.command()
 def playtest(
     target: str = typer.Argument(..., help="A .uproject, packaged build, OpenXR executable, or 'demo'"),
     persona: str = typer.Option("first-timer", "--persona", "-p", help="See `visor sim personas`"),
@@ -684,10 +725,12 @@ def playtest(
     and the crash log if it crashed."""
     from visor.xr.playtest.session import DEFAULT_GOAL, Playtest, PlaytestConfig
 
-    if brain == "claude" and not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                                  or Path.home().joinpath(".config", "anthropic").exists()):
-        _die("the Claude playtester needs Anthropic credentials (export ANTHROPIC_API_KEY, or `ant auth login`). "
-             "Try --brain monkey for a model-free run.")
+    from visor.xr.playtest import credentials
+
+    if brain == "claude" and not credentials.source():
+        _die("the Claude playtester needs an Anthropic API key: run `visor sim login` once, or paste it in the "
+             "dashboard's Playtests panel. No key? Ask Claude Code to playtest it (the xr_playtest tools), "
+             "or use --brain monkey for a model-free run.")
     cfg = PlaytestConfig(target=target, persona=persona, goal=goal or DEFAULT_GOAL, brain=brain, model=model,
                          effort=effort, max_steps=steps, max_minutes=minutes, seed=seed, map=map_name,
                          headset=headset, video=not no_video)

@@ -595,9 +595,49 @@ class PlaytestBody(BaseModel):
     map: Optional[str] = None
 
 
+class ClaudeKeyBody(BaseModel):
+    key: str
+
+
+@router.get("/claude")
+def claude_status():
+    """Whether the Claude playtester can sign in, and with what (never the key)."""
+    from visor.xr.playtest import credentials
+
+    src = credentials.source()
+    return {"ready": src is not None, **(src or {})}
+
+
+@router.post("/claude")
+def claude_save(body: ClaudeKeyBody):
+    from visor.xr.playtest import credentials
+
+    try:
+        saved = credentials.save(body.key)
+    except credentials.CredentialsError as e:
+        raise HTTPException(400, str(e)) from None
+    except ImportError:
+        raise HTTPException(400, "the Claude playtester needs the anthropic package in this Visor") from None
+    src = credentials.source() or {}
+    return {"ready": True, **src, "note": saved["note"]}
+
+
+@router.delete("/claude")
+def claude_forget():
+    from visor.xr.playtest import credentials
+
+    credentials.forget()
+    src = credentials.source()
+    return {"ready": src is not None, **(src or {})}
+
+
 @router.post("/playtest")
 def playtest_start(body: PlaytestBody):
+    from visor.xr.playtest import credentials
     from visor.xr.playtest.session import DEFAULT_GOAL, Playtest, PlaytestConfig
+
+    if body.brain == "claude" and not credentials.source():
+        raise HTTPException(400, "Add your Anthropic API key first (under Played by).")
 
     cfg = PlaytestConfig(target=body.target, persona=body.persona, goal=body.goal or DEFAULT_GOAL,
                          brain=body.brain, model=body.model, effort=body.effort, max_steps=body.steps,

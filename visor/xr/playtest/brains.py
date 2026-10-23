@@ -269,7 +269,9 @@ class ClaudeBrain(Brain):
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium", max_tokens: int = 16000):
         import anthropic
 
-        self.client = anthropic.Anthropic()
+        from visor.xr.playtest import credentials
+
+        self.client = anthropic.Anthropic(**credentials.client_kwargs())
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens

@@ -379,10 +379,41 @@
   }
   function updateCost() {
     const steps = +$("#pt-steps").value || 30;
-    $("#pt-cost").textContent = $("#pt-brain").value === "claude"
-      ? `≈ $${(steps * 0.012).toFixed(2)}–$${(steps * 0.03).toFixed(2)} of Claude Opus 5.5 · needs ANTHROPIC_API_KEY`
+    const claude = $("#pt-brain").value === "claude";
+    $("#pt-cost").textContent = claude
+      ? `≈ $${(steps * 0.012).toFixed(2)}–$${(steps * 0.03).toFixed(2)} of Claude Opus 5.5`
       : "free · reproducible from its seed";
+    $("#pt-key").hidden = !claude;
+    $("#pt-go").disabled = claude && !S.claude?.ready;
   }
+  function showClaude(c) {
+    S.claude = c;
+    const ok = !!c?.ready;
+    $("#pt-key-in").hidden = ok; $("#pt-key-ok").hidden = !ok;
+    $("#pt-key").classList.toggle("env", c?.kind === "env" || c?.kind === "profile");
+    $("#pt-key-label").textContent = ok ? c.label : "";
+    updateCost();
+  }
+  async function loadClaude() {
+    try { showClaude(await api("/api/xr/claude")); } catch { showClaude(null); }
+  }
+  $("#pt-key-form").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const field = $("#pt-key-field"), form = $("#pt-key-form"), key = field.value.trim();
+    if (!key) { field.setAttribute("aria-invalid", "true"); field.focus(); return; }
+    form.classList.add("busy"); $("#pt-key-save").textContent = "CHECKING…";
+    try {
+      const r = await post("/api/xr/claude", { key });
+      field.value = ""; field.removeAttribute("aria-invalid");
+      showClaude(r);
+      toast(r.note ? `Key saved — ${r.note}` : "Key checked and saved");
+    } catch (e) { field.setAttribute("aria-invalid", "true"); fail(e); }
+    finally { form.classList.remove("busy"); $("#pt-key-save").textContent = "SAVE KEY"; }
+  };
+  $("#pt-key-field").oninput = () => $("#pt-key-field").removeAttribute("aria-invalid");
+  $("#pt-key-forget").onclick = async () => {
+    try { showClaude(await api("/api/xr/claude", { method: "DELETE" })); toast("Key forgotten"); } catch (e) { fail(e); }
+  };
   $("#pt-steps").oninput = updateCost; $("#pt-brain").onchange = updateCost;
   $("#pt-go").onclick = async () => {
     const target = $("#pt-target").value.trim() || $("#pt-target").placeholder;
@@ -632,7 +663,7 @@
     if (id === "sim" || id === "playtests") {
       if (!started) { started = true; loadSuggest(); loadPersonas(); updateCost(); loadVoices(); }
       if (id === "sim") { refreshApps(); if (S.current && S.streamKey !== S.current) startStream(); }
-      if (id === "playtests") loadReports();
+      if (id === "playtests") { loadReports(); loadClaude(); }
     } else if (S.streamKey) {
       stopStream();  // don't keep a stream running in the background
       listenLive(false);

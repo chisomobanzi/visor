@@ -742,6 +742,24 @@
                 <option value="monkey">Monkey — seeded random input, free</option></select></label>
             <label class="fld"><span>Actions</span><input id="pt-steps" type="number" value="30" min="5" max="200"></label>
           </div>
+          <div class="pt-key" id="pt-key" hidden>
+            <div class="pt-key-in" id="pt-key-in">
+              <div class="pt-key-copy">
+                <b>Sign the playtester in</b>
+                <span>Paste an Anthropic API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. It stays on this computer, readable only by you, and the terminal's <code>visor sim playtest</code> uses it too.</span>
+              </div>
+              <form class="pt-key-form" id="pt-key-form" autocomplete="off">
+                <input id="pt-key-field" type="password" placeholder="sk-ant-…" spellcheck="false" aria-label="Anthropic API key">
+                <button class="primary" id="pt-key-save" type="submit">SAVE KEY</button>
+              </form>
+              <div class="pt-key-alt">No key? Ask Claude Code to playtest the app instead: through Visor's <code>xr_playtest</code> tools it plays on its own plan, and you get the same report.</div>
+            </div>
+            <div class="pt-key-ok" id="pt-key-ok" hidden>
+              <span class="pt-key-dot" aria-hidden="true"></span>
+              <span>Signed in with <b id="pt-key-label"></b></span>
+              <button id="pt-key-forget" type="button">FORGET</button>
+            </div>
+          </div>
           <div style="display:flex; gap:10px; align-items:center">
             <button id="pt-go" class="primary">START PLAYTEST</button>
             <span class="pt-cost" id="pt-cost"></span>

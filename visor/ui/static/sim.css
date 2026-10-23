@@ -205,6 +205,26 @@ h3.mini { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; colo
 .persona[aria-checked="true"] b { color: var(--lens); }
 .pt-row { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }
 .pt-cost { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.pt-key { border: 1px solid var(--line); border-radius: 10px; background: var(--raised); padding: 12px 13px; }
+.pt-key-in { display: flex; flex-direction: column; gap: 10px; }
+.pt-key-copy { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.pt-key-copy b { color: var(--ink); font-size: 13px; font-weight: 600; }
+.pt-key a { color: var(--lens); text-decoration: none; border-bottom: 1px solid rgba(107,203,223,.35); }
+.pt-key a:hover { border-bottom-color: var(--lens); }
+.pt-key code { font-family: var(--mono); font-size: 11px; color: #cfd4e0; }
+.pt-key-form { display: flex; gap: 8px; }
+.pt-key-form input { flex: 1; min-width: 0; background: var(--surface); letter-spacing: .04em; }
+.pt-key-form input:focus { outline: none; border-color: var(--lens); }
+.pt-key-form input[aria-invalid="true"] { border-color: var(--bad); }
+.pt-key-form button { white-space: nowrap; }
+.pt-key-form.busy button { opacity: .6; pointer-events: none; }
+.pt-key-alt { font-size: 11.5px; color: var(--faint); line-height: 1.45; border-top: 1px solid var(--line); padding-top: 9px; }
+.pt-key-ok { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--muted); }
+.pt-key-ok b { color: var(--ink); font-weight: 600; }
+.pt-key-ok button { margin-left: auto; padding: 4px 10px; font-size: 10px; }
+.pt-key-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px rgba(47,163,107,.18); flex: none; }
+.pt-key.env .pt-key-ok button { display: none; }
+@media (max-width: 520px) { .pt-key-form { flex-direction: column; } }
 .pt-live { display: flex; flex-direction: column; gap: 10px; }
 .pt-live-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .pt-live-head b { font-size: 14px; }

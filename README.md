@@ -176,18 +176,21 @@ Every `xr_*` MCP tool returns what the headset sees after the action — and wha
 ### Playtests
 
 ```bash
+visor sim login                                                          # once: an Anthropic API key
 visor sim playtest ~/Projects/Game --persona first-timer --steps 40
 visor sim playtest demo --brain monkey --persona speedrunner --seed 7   # model-free, reproducible
 visor sim personas
 ```
 
-A playtester is Claude (`claude-opus-5-5`, needs `ANTHROPIC_API_KEY`) in character — a **first-timer** who doesn't read instructions, a **speedrunner** hunting soft-locks, a **seated** player who can't reach high shelves (the eye height and reach are enforced, not role-played), a **motion-sensitive** player, a **one-handed** player, a **soft-spoken** player whose voice really is quiet, a **thorough explorer** — or a seeded **monkey** that costs nothing. Alongside what the agent reports, the run watches for what's measurably wrong: crashes, frozen screens, black screens, input that stops doing anything, errors in the app's log, and frame rate below the display's. Each run writes, under `~/.local/share/visor/xr/runs/<name>/`:
+A playtester is Claude (`claude-opus-5-5`) in character — a **first-timer** who doesn't read instructions, a **speedrunner** hunting soft-locks, a **seated** player who can't reach high shelves (the eye height and reach are enforced, not role-played), a **motion-sensitive** player, a **one-handed** player, a **soft-spoken** player whose voice really is quiet, a **thorough explorer** — or a seeded **monkey** that costs nothing. Alongside what the agent reports, the run watches for what's measurably wrong: crashes, frozen screens, black screens, input that stops doing anything, errors in the app's log, and frame rate below the display's. Each run writes, under `~/.local/share/visor/xr/runs/<name>/`:
 
 - `report.html` — every issue with its screenshot and the actions before it, the verdict, the frame-time chart, every step (and every spoken line, playable)
 - `repro.sh` — relaunches the app frozen and replays every input and spoken line at the same frame (Unreal runs with a fixed timestep, so game time lines up too)
 - `video.mp4`, `frames.json` (per-frame timing), `app.log`, and the engine's crash report if there was one
 
 The dashboard's **PLAYTESTS** page runs them and keeps the reports.
+
+**Signing in.** The Claude playtester calls the Anthropic API. Paste a key from [console.anthropic.com](https://console.anthropic.com/settings/keys) once, in the dashboard's Playtests panel or with `visor sim login`: it's checked with Anthropic, then kept in `~/.config/visor/anthropic-key`, readable only by you, and Visor only ever shows its last four characters (`visor sim logout` forgets it). `ANTHROPIC_API_KEY` in the environment, or an `ant auth login` profile, works too and wins over the saved key.
 
 **No key: let Claude Code play.** The `xr_playtest_*` MCP tools give the same seat to the assistant you're already talking to, on its own plan. Ask *"playtest ~/Projects/Game as a first-timer"*: `xr_playtest_start` boots the app and hands over the persona, the goal and the first frame; each `xr_playtest_act` makes moves (the same vocabulary as above: click, press, say, report_issue, finish…) and answers with the next frame and what the app said. Visor plays each move out with the same oracles watching and writes the same report, replay and video.
 
