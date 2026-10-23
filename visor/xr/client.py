@@ -144,6 +144,10 @@ class XrClient:
                     if attempt == 0 and not isinstance(e, socket.timeout):
                         continue
                     raise XrError(f"{cmd}: {e}") from None
+                except BaseException:  # interrupted (Ctrl-C): its late reply would answer the next call
+                    self._sock.close()
+                    self._sock = None
+                    raise
                 if not raw:
                     self._sock.close()
                     self._sock = None

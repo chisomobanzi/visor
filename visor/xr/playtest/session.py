@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shlex
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -41,8 +43,21 @@ from visor.xr.sim import AppSpec, SimConfig, SimError, SimInstance, detect_crash
 FPS = 72
 LISTEN_WAIT = 12.0  # seconds of world time to let the app finish talking before each look
 LISTEN_EXPECT = 1.5  # after an action, how long a reply gets to begin
+STALL_NOTE = 10.0  # seconds the app may take over an action's frames before the freeze is an issue
+STALL_LIMIT = 20 * 60.0  # seconds without drawing anything before the app counts as hung
+STALL_POLL = 5.0
 DEFAULT_GOAL =("Start the experience as a new player would and get as far as you can through it, "
                 "noting everything that gets in your way.")
+
+
+def _duration(seconds: float) -> str:
+    """16 min 34 s, 45 s, 1 h 2 min"""
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s} s"
+    if s < 3600:
+        return f"{s // 60} min" + (f" {s % 60} s" if s % 60 else "")
+    return f"{s // 3600} h" + (f" {s % 3600 // 60} min" if s % 3600 // 60 else "")
 
 
 @dataclass
@@ -159,6 +174,7 @@ class Playtest:
         self.verdict: dict = {}
         self.perf: dict = {}
         self.crash: Optional[dict] = None
+        self.stopped_for: Optional[str] = None  # ended early through no fault of the app
         self.sim: Optional[SimInstance] = None
         self.xr: Optional[XrClient] = None
         self.voice_events: list[dict] = []  # what was said, at which frame: replayed with the inputs
@@ -332,6 +348,93 @@ class Playtest:
                 step=step, frame=frame, source="oracle:audio"))
         return " " + heard.describe()
 
+    def _advance(self, frames: int) -> tuple[float, float]:
+        """Run the paused app ``frames`` frames, watching it from a second
+        connection meanwhile. Returns (the longest it drew nothing, the whole
+        time) in seconds: a level loading, shaders compiling, a hang. An app
+        that draws nothing for STALL_LIMIT is closed as hung."""
+        assert self.xr and self.sim
+        start = time.monotonic()
+        longest = [0.0]
+        hung: list[float] = []
+        done = threading.Event()
+        sim = self.sim
+
+        def watch() -> None:
+            last, changed, told = None, start, start
+            with XrClient(sim.socket_path, timeout=5.0) as probe:
+                while not done.wait(STALL_POLL):
+                    try:
+                        drawn = probe.state()["render_frame"]
+                    except (XrError, KeyError, TypeError):
+                        if not sim.alive():
+                            return
+                        continue  # a wedged layer: the step's own timeout covers that
+                    now = time.monotonic()
+                    if drawn != last:
+                        last, changed = drawn, now
+                    longest[0] = max(longest[0], now - changed)
+                    if now - changed >= STALL_LIMIT:
+                        hung.append(now - changed)
+                        sim.proc.send_signal(signal.SIGTERM)  # not sim.stop(): the step holds the client
+                        try:
+                            sim.proc.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            sim.proc.kill()
+                        return
+                    if now - changed >= 30 and now - told >= 60:
+                        told = now
+                        self._emit("status", message=f"the app hasn't drawn anything for {_duration(now - changed)}"
+                                                     " (loading?); waiting without using up actions")
+
+        watcher = threading.Thread(target=watch, name="stall watch", daemon=True)
+        watcher.start()
+        try:
+            self.xr.step(frames, timeout=STALL_LIMIT + 60)
+        except XrError:
+            if not hung:
+                raise
+        finally:
+            done.set()
+            watcher.join(10)
+        if hung:
+            self.stopped_for = f"the app drew nothing for {_duration(hung[0])}, so Visor closed it as hung"
+            last = self.steps[-1] if self.steps else None
+            self._add_issue(Issue(
+                title=f"The app stopped drawing for {_duration(hung[0])}",
+                severity="blocker", category="functional", source="oracle:hang",
+                description=(f"After {last.action if last else 'starting'} the app drew no new frame for "
+                             f"{_duration(hung[0])}; Visor closed it as hung. The log tail is in app.log."),
+                step=last.step if last else 0, frame=last.frame if last else 0,
+                screenshot=last.screenshot if last else None))
+            raise SimError(self.stopped_for)
+        return longest[0], time.monotonic() - start
+
+    def _stall_issue(self, step: int, frame: int, screenshot: Optional[str], frozen: float, total: float,
+                     log: list[str]) -> tuple[Issue, str]:
+        """An issue for a long freeze, and a line telling the agent about it.
+        The log says what the app was busy with."""
+        joined = "\n".join(log)
+        loading = re.findall(r"LoadMap: (\S+)", joined)
+        level = loading[-1].rsplit("/", 1)[-1] if loading else None
+        shaders = "LogShaderCompilers" in joined or "ShaderCompileWorker" in joined
+        last = self.steps[-1] if self.steps else None
+        after = f"'{last.action}'" if last else "the last action"
+        title = f"The view froze for {_duration(frozen)}" + (f" while {level} loaded" if level else f" after {after}")
+        description = (f"After {after} the app drew no new frame for {_duration(frozen)} (the action took "
+                       f"{_duration(total)} in all). In a headset the player is left looking at a frozen image "
+                       "until it's back; long loads read better behind a loading screen or stereo layer.")
+        if shaders:
+            description += (" Unreal was compiling shaders meanwhile, which a packaged build doesn't do, so a Quest "
+                            "build would freeze for less time than this.")
+        issue = Issue(title=title, severity="major" if frozen >= 60 else "minor", category="performance",
+                      description=description, step=step, frame=frame, source="oracle:stall", screenshot=screenshot,
+                      extra={"frozen_s": round(frozen, 1), "total_s": round(total, 1), "level": level,
+                             "compiling_shaders": shaders})
+        note = (f" The app then drew nothing for {_duration(frozen)}"
+                + (f" while it loaded {level}" if level else "") + "; it's drawing again now.")
+        return issue, note
+
     def _observe(self, step: int, text: str) -> tuple[Observation, str, int]:
         text += self._listen(step)
         img, rel, frame = self._shot(step)
@@ -361,6 +464,10 @@ class Playtest:
             else:
                 self.verdict = self.verdict or {"goal_achieved": False, "rating": 0, "summary": f"Stopped: {e}"}
                 self._emit("error", message=str(e))
+        except KeyboardInterrupt:  # Ctrl-C, or the CLI's SIGTERM/SIGHUP: still leave a report
+            self.stopped_for = self.stopped_for or "the playtest was interrupted"
+            self.verdict = self.verdict or {"goal_achieved": False, "summary": f"Stopped early: {self.stopped_for}."}
+            raise
         finally:
             self._finish()
         return self.report
@@ -464,17 +571,23 @@ class Playtest:
                 self._emit("action", step=step, action=call.name, args=call.args, thought=call.thought, result=text)
             if finished:
                 break
-            if frames:
-                self.xr.step(min(frames, 30 * FPS), timeout=120)
+            frozen, took = self._advance(min(frames, 30 * FPS)) if frames else (0.0, 0.0)
             if not self.sim.alive():
                 raise SimError("the app exited")
-            obs, rel, frame = self._observe(step, results[-1][1] if results else "")
+            log = self._new_log_lines()
+            text = results[-1][1] if results else ""
+            if frozen >= STALL_NOTE:
+                deadline += took  # time the agent never got to use
+                issue, note = self._stall_issue(step, frame, rel, frozen, took, log)
+                self._add_issue(issue)
+                text += note
+            obs, rel, frame = self._observe(step, text)
             img = obs.image
             if self.steps:
                 self.steps[-1].screenshot = rel
             for issue in self.oracles.after_step(step, frame, img, acted, rel):
                 self._add_issue(issue)
-            for issue in self.oracles.logs(step, frame, self._new_log_lines()):
+            for issue in self.oracles.logs(step, frame, log + self._new_log_lines()):
                 issue.screenshot = rel
                 self._add_issue(issue)
             self._emit("view", step=step, frame=frame, screenshot=rel)
@@ -483,6 +596,12 @@ class Playtest:
             calls = self.brain.next(results, obs)
 
     def _record_crash(self) -> None:
+        reason = self.stopped_for or (self.sim.ended_by() if self.sim else None)
+        if reason:  # not the app's doing: no crash to report
+            self.stopped_for = reason
+            self.verdict = self.verdict or {"goal_achieved": False, "summary": f"Stopped early: {reason}."}
+            self._emit("error", message=f"stopped early: {reason}")
+            return
         self.crash = detect_crash(self.dir, self.app) or {"message": "the app exited unexpectedly", "callstack": []}
         last = self.steps[-1] if self.steps else None
         self._add_issue(Issue(
@@ -520,7 +639,7 @@ class Playtest:
         if self.sim:
             if self.sim.alive():
                 self.sim.stop()
-            elif not self.crash:
+            elif not self.crash and not self.stopped_for:
                 self._record_crash()
         self._write_repro(replay is not None)
         self.report = self._report(video)
@@ -583,6 +702,7 @@ class Playtest:
             # Frames in between were single-stepped by the agent, not real time.
             "paused_frames": [getattr(self, "paused_from", None), getattr(self, "paused_to", None)],
             "crash": self.crash,
+            "stopped_for": self.stopped_for,
             "artifacts": {
                 "video": "video.mp4" if video else None,
                 "replay": "replay.json" if (self.dir / "replay.json").exists() else None,

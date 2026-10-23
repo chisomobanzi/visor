@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,18 @@ def _hint(extra: str) -> str:
     from visor.xr.paths import install_hint
 
     return escape(install_hint(extra))
+
+
+def _interrupt_on_termination() -> None:
+    """Treat SIGTERM (systemd stopping the terminal's scope, kill) and SIGHUP
+    (the terminal closing) like Ctrl-C, so a long run still stops its apps
+    and writes its report instead of vanishing without one."""
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, interrupt)
 
 
 def _client(target: Optional[str]):
@@ -704,11 +717,14 @@ def playtest(
         _die(str(e))
     console.print(f"[bold]{test.persona.name}[/bold] playtests [bold]{target}[/bold] "
                   f"[dim]({brain}{'' if brain != 'claude' else ' · ' + model}, up to {steps} actions)[/dim]")
+    _interrupt_on_termination()
     try:
         report = test.run()
     except KeyboardInterrupt:
         status.stop()
-        console.print("[yellow]stopped early[/yellow]")
+        html = test.dir / "report.html"
+        console.print(f"[yellow]stopped early[/yellow]{f'  report  file://{html}' if html.exists() else ''}",
+                      soft_wrap=True)  # a wrapped link isn't clickable
         raise typer.Exit(130)
     finally:
         status.stop()
@@ -724,7 +740,7 @@ def playtest(
         f"{f'rating {rating}/10   ' if rating is not None else ''}{outcome}",
         title=f"{report['persona']['name']} · {report['app']['name']}", expand=False))
     html = test.dir / "report.html"
-    console.print(f"report  file://{html}")
+    console.print(f"report  file://{html}", soft_wrap=True)
     if open_report:
         import webbrowser
 
@@ -766,6 +782,7 @@ def fleet(
         return t
 
     f = Fleet(cfg)
+    _interrupt_on_termination()
     with Live(table(f.results), console=console, refresh_per_second=2) as live:
         f.on_update = lambda results: live.update(table(results))
         try:
@@ -777,7 +794,7 @@ def fleet(
                   f"mean {summary['mean_fps']} fps · {len(summary['issues'])} distinct issues · "
                   f"{summary['elapsed_s'] / 60:.1f} min")
     page = f.dir / "fleet.html"
-    console.print(f"report  file://{page}")
+    console.print(f"report  file://{page}", soft_wrap=True)
     if open_report:
         import webbrowser
 

@@ -153,6 +153,8 @@ def write_html(report: dict, out: Path) -> Path:
     scripted = brain.get("kind") != "claude"
     verdict_txt = "Goal reached" if achieved else ("Goal not reached" if achieved is False else
                                                    ("Scripted run" if scripted else "No verdict"))
+    if report.get("stopped_for") and not achieved:  # cut short: the agent never got to judge
+        verdict_cls, verdict_txt = "", "Stopped early"
     highlights = "".join(f"<li>{_e(h)}</li>" for h in verdict.get("highlights") or [])
     frustrations = "".join(f"<li>{_e(h)}</li>" for h in verdict.get("frustrations") or [])
 
