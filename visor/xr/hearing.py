@@ -153,7 +153,7 @@ def transcribe(samples, language: Optional[str] = None, model: Optional[str] = N
     """Speech in 16 kHz mono audio: [(start s, end s, text)] and the language
     it's in (None if unsure)."""
     if not available():
-        raise HearingError("hearing words needs speech recognition: pip install 'visor-dev[voice]'")
+        raise HearingError(f"hearing words needs speech recognition: {paths.install_hint('voice')}")
     import numpy as np
 
     audio = np.asarray(samples, dtype=np.float32)

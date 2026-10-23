@@ -68,6 +68,20 @@ def native_dir() -> Path:
     raise FileNotFoundError("Visor's native sources are missing from this install")
 
 
+# The optional extras (pyproject.toml) and the packages each one brings.
+EXTRAS = {"app": "pywebview", "agent": "anthropic", "voice": "piper-tts faster-whisper"}
+
+
+def install_hint(extra: str) -> str:
+    """How to add an optional extra to *this* Visor: pipx installs inject the
+    packages (a pip install wouldn't reach pipx's private environment)."""
+    if os.environ.get("APPIMAGE"):
+        return "this AppImage was built without them; rebuild it with packaging/appimage/build-appimage.sh"
+    if f"{os.sep}pipx{os.sep}venvs{os.sep}" in sys.prefix:
+        return f"pipx inject visor-dev {EXTRAS[extra]}"
+    return f"pip install 'visor-dev[{extra}]'"
+
+
 def visor_command() -> str:
     """A shell command that runs this same Visor later (for generated scripts):
     the AppImage if we're inside one, else the venv's script, else PATH."""

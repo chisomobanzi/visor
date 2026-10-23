@@ -167,7 +167,7 @@ def synthesize(text: str, voice: Optional[str] = None, language: Optional[str] =
     out = paths.cache_home() / "speech" / f"{key}.wav"
     if not out.exists():
         if not available():
-            raise VoiceError("speaking needs a text-to-speech engine: pip install 'visor-dev[voice]' "
+            raise VoiceError(f"speaking needs a text-to-speech engine: {paths.install_hint('voice')} "
                              "(or play a recording with --file)")
         from piper.config import SynthesisConfig
 

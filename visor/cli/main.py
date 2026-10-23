@@ -13,6 +13,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from visor import adb
@@ -50,7 +51,8 @@ LEVEL_STYLES = {
 
 
 def die(message: str) -> None:
-    err_console.print(f"[bold red]error:[/bold red] {message}")
+    # Escaped: messages carry device output and paths, and square brackets in them are not markup.
+    err_console.print(f"[bold red]error:[/bold red] {escape(message)}")
     raise typer.Exit(1)
 
 

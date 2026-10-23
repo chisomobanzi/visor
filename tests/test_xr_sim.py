@@ -143,3 +143,26 @@ def test_simulated_apps_go_first_when_memory_runs_out():
     finally:
         p.kill()
         p.wait()
+
+
+class TestInstallHints:
+    def test_pip_by_default(self, monkeypatch):
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        monkeypatch.setattr(paths.sys, "prefix", "/home/u/project/.venv")
+        assert paths.install_hint("agent") == "pip install 'visor-dev[agent]'"
+
+    def test_pipx_installs_inject(self, monkeypatch):
+        """A pip install wouldn't reach pipx's private environment."""
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        monkeypatch.setattr(paths.sys, "prefix", "/home/u/.local/share/pipx/venvs/visor-dev")
+        assert paths.install_hint("voice") == "pipx inject visor-dev piper-tts faster-whisper"
+
+    def test_cli_errors_keep_their_square_brackets(self, capsys):
+        """Rich read [agent] as markup and printed `pip install 'visor-dev'`."""
+        import typer
+
+        from visor.cli import sim as cli
+
+        with pytest.raises(typer.Exit):
+            cli._die("needs the anthropic package: pip install 'visor-dev[agent]'")
+        assert "'visor-dev[agent]'" in capsys.readouterr().err.replace("\n", "")

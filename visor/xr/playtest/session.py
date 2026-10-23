@@ -382,7 +382,7 @@ class Playtest:
             self.ears = Ears(self.xr.mic(), since=max(self.sim.started_clock or 0.0, time.monotonic() - 60.0),
                              log=lambda m: self._emit("status", message=m))
             if not self.ears.transcribe:
-                self._emit("status", message="hearing sounds but not words: pip install 'visor-dev[voice]'")
+                self._emit("status", message=f"hearing sounds but not words: {paths.install_hint('voice')}")
         if "right" not in p.hands:
             self.xr.set(right={"connected": False})
         if "left" not in p.hands:

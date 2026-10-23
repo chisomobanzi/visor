@@ -16,6 +16,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -29,8 +30,15 @@ err = Console(stderr=True)
 
 
 def _die(message: str) -> None:
-    err.print(f"[bold red]error:[/bold red] {message}")
+    # Escaped: messages carry paths and install hints like visor-dev[agent], which are not markup.
+    err.print(f"[bold red]error:[/bold red] {escape(message)}")
     raise typer.Exit(1)
+
+
+def _hint(extra: str) -> str:
+    from visor.xr.paths import install_hint
+
+    return escape(install_hint(extra))
 
 
 def _client(target: Optional[str]):
@@ -97,7 +105,7 @@ def doctor():
         have = tts.installed()
         table.add_row("[green]✓[/green]", "speech", f"[dim]{', '.join(have) if have else 'voices download on first use'}[/dim]")
     else:
-        table.add_row("[yellow]–[/yellow]", "speech", "optional: pip install 'visor-dev[voice]'")
+        table.add_row("[yellow]–[/yellow]", "speech", f"optional: {_hint('voice')}")
     from visor.xr import hearing
 
     if hearing.available():
@@ -105,7 +113,7 @@ def doctor():
         table.add_row("[green]✓[/green]", "hearing", f"[dim]whisper {model}"
                       f"{'' if hearing.installed() else ' (downloads on first use, ~145 MB)'}[/dim]")
     else:
-        table.add_row("[yellow]–[/yellow]", "hearing", "optional: pip install 'visor-dev[voice]' "
+        table.add_row("[yellow]–[/yellow]", "hearing", f"optional: {_hint('voice')} "
                       "[dim](sounds are heard either way; words need it)[/dim]")
     console.print(Panel(table, title="virtual headset", expand=False))
     if not ok_all:
@@ -571,7 +579,7 @@ def hear(
         console.print(f"[cyan]🔊[/cyan] {heard.describe()}")
         console.print(f"   [dim]{hearing.level_bar([round(x, 1) for x in _levels(heard)])}  {span}[/dim]")
     if not hearing.available():
-        console.print("[dim]   words need speech recognition: pip install 'visor-dev[voice]'[/dim]")
+        console.print(f"[dim]   words need speech recognition: {_hint('voice')}[/dim]")
     if save:
         console.print(f"[dim]   saved {heard.save(save)}[/dim]")
 
@@ -591,7 +599,7 @@ def voices(
     from visor.xr import voice as tts
 
     if not tts.available():
-        console.print("[yellow]no text-to-speech engine[/yellow] — pip install 'visor-dev[voice]' "
+        console.print(f"[yellow]no text-to-speech engine[/yellow] — {_hint('voice')} "
                       "[dim](recordings still work: visor sim say --file hello.wav)[/dim]")
     if get:
         try:

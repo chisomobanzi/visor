@@ -423,8 +423,9 @@ def make_brain(kind: str, seed: int = 0, model: str = "claude-opus-5-5", effort:
         try:
             return ClaudeBrain(model=model, effort=effort)
         except ImportError:
-            raise ValueError("the Claude playtester needs the anthropic package: "
-                             "pip install 'visor-dev[agent]'") from None
+            from visor.xr.paths import install_hint
+
+            raise ValueError(f"the Claude playtester needs the anthropic package: {install_hint('agent')}") from None
     if kind == "monkey":
         return MonkeyBrain(seed=seed)
     raise ValueError(f"unknown brain '{kind}' (claude | monkey)")
